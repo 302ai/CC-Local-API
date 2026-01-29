@@ -1,0 +1,7 @@
+.claude
+.git
+.venv
+app.db*
+docker-compose.yml
+
+.gitignore

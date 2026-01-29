@@ -1,0 +1,797 @@
+from __future__ import annotations
+
+import asyncio
+import base64
+import binascii
+import json
+import mimetypes
+import os
+import re
+import secrets
+import shlex
+import string
+import uuid
+from pathlib import Path
+from typing import Any, Optional, List, Literal, Union, Tuple
+from urllib.parse import quote, urlparse
+
+import aiohttp
+from fastapi import APIRouter, Depends, Request, Query
+from starlette.responses import StreamingResponse
+
+from app.api.response import fail, ok
+from app.api.routes_command import sse_message
+from app.core.command_parser import parse_command_from_message, CommandType
+from app.core.command_runner import CommandRunner
+from app.core.config import ROOT_SAVE_PATH, settings
+from app.core.file_content import create_zip_from_directory
+from app.core.file_io import download_file_from_url, write_file_async
+from app.core.http_client import fetch_json_with_retry
+from app.core.log import log_error, log_info
+from app.db.session import get_db, run_in_threadpool
+from app.repositories.session_repo import SessionRepository
+
+
+from pydantic import BaseModel, Field
+
+from claude_md import claude_md_str
+
+router = APIRouter()
+
+_MIME_TO_EXT = {
+    # ---------- images ----------
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/pjpeg": ".jpg",
+    "image/png": ".png",
+    "image/apng": ".apng",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "image/bmp": ".bmp",
+    "image/x-ms-bmp": ".bmp",
+    "image/tiff": ".tif",
+    "image/x-icon": ".ico",
+    "image/vnd.microsoft.icon": ".ico",
+    "image/heic": ".heic",
+    "image/heif": ".heif",
+    "image/avif": ".avif",
+    "image/svg+xml": ".svg",
+
+    # ---------- documents / text ----------
+    "application/pdf": ".pdf",
+    "text/plain": ".txt",
+    "text/markdown": ".md",
+    "text/html": ".html",
+    "text/css": ".css",
+    "text/csv": ".csv",
+    "text/tab-separated-values": ".tsv",
+    "application/json": ".json",
+    "application/ld+json": ".jsonld",
+    "application/xml": ".xml",
+    "text/xml": ".xml",
+    "application/yaml": ".yaml",
+    "text/yaml": ".yaml",
+    "application/x-yaml": ".yaml",
+    "application/rtf": ".rtf",
+
+    # ---------- office ----------
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/vnd.ms-powerpoint": ".ppt",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "application/vnd.ms-outlook": ".msg",
+
+    # ---------- archives ----------
+    "application/zip": ".zip",
+    "application/x-zip-compressed": ".zip",
+    "application/x-7z-compressed": ".7z",
+    "application/x-rar-compressed": ".rar",
+    "application/x-tar": ".tar",
+    "application/gzip": ".gz",
+    "application/x-gzip": ".gz",
+    "application/x-bzip2": ".bz2",
+    "application/x-xz": ".xz",
+
+    # ---------- audio ----------
+    "audio/mpeg": ".mp3",
+    "audio/mp3": ".mp3",
+    "audio/wav": ".wav",
+    "audio/x-wav": ".wav",
+    "audio/flac": ".flac",
+    "audio/aac": ".aac",
+    "audio/ogg": ".ogg",
+    "audio/opus": ".opus",
+    "audio/mp4": ".m4a",
+    "audio/x-m4a": ".m4a",
+    "audio/webm": ".weba",
+    "audio/midi": ".mid",
+    "audio/x-midi": ".mid",
+
+    # ---------- video ----------
+    "video/mp4": ".mp4",
+    "video/mpeg": ".mpeg",
+    "video/quicktime": ".mov",
+    "video/x-msvideo": ".avi",
+    "video/x-ms-wmv": ".wmv",
+    "video/webm": ".webm",
+    "video/ogg": ".ogv",
+    "video/x-matroska": ".mkv",
+    "video/3gpp": ".3gp",
+    "video/3gpp2": ".3g2",
+
+    # ---------- fonts ----------
+    "font/ttf": ".ttf",
+    "font/otf": ".otf",
+    "font/woff": ".woff",
+    "font/woff2": ".woff2",
+    "application/font-woff": ".woff",
+    "application/font-woff2": ".woff2",
+
+    # ---------- binaries / misc ----------
+    "application/octet-stream": "",  # 不确定就留空，交给内容识别/文件名
+    "application/x-msdownload": ".exe",
+
+    # ---------- common code/config ----------
+    "application/javascript": ".js",
+    "text/javascript": ".js",
+    "application/x-python-code": ".py",
+}
+
+# 需要排除的目录和文件模式
+EXCLUDE_PATTERNS = {
+    "node_modules",
+    ".git",
+    ".svn",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "env",
+    "dist",
+    "build",
+    ".idea",
+    ".vscode",
+    ".DS_Store",
+    ".cache",
+    "coverage",
+    ".pytest_cache",
+    ".egg-info",
+    ".tox",
+    "target",
+    "vendor",
+    "bin",
+    "obj",
+    ".next",
+    ".nuxt",
+    "bower_components",
+}
+
+class TextContent(BaseModel):
+    type: Literal["text"] = Field(default="text", description="内容类型")
+    text: str = Field(..., description="文本内容")
+
+class ImageContent(BaseModel):
+    type: Literal["image_url"] = Field(default="image_url", description="内容类型")
+    image_url: dict = Field(..., description="图片URL信息")
+
+
+class Message(BaseModel):
+    role: Literal["user", "assistant", "system", "tool"] = Field(..., description="消息角色")
+    content: Union[str, List[Union[TextContent, ImageContent]]] = Field(..., description="消息内容")
+
+
+class ClaudeChatCompletionRequest(BaseModel):
+    model: str = Field(..., description="模型名称")
+    # max_tokens: int = Field(1024, description="最大生成token数", gt=0)
+    messages: List[Message] = Field(..., description="对话消息列表")
+    stream: bool = Field(True, description="是否流式输出")
+    structured_output: bool = Field(False, description="是否以CC原始结构输出")
+    enable_pre_deploy_check: bool = Field(False, description="是否开启部署前检测 需要开启structured_output使用")
+    available_skills: List[str] = Field([], description="对话选择开启的skills")
+    action: str = Field("", description="特殊操作指令")
+
+    class Config:
+        extra = "allow"
+
+
+def get_session_repo(db=Depends(get_db)) -> SessionRepository:
+    return SessionRepository(db)
+
+
+
+@router.post("/chat/completions")
+async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, repo: SessionRepository = Depends(get_session_repo)):
+
+    if not payload.messages or len(payload.messages) == 0:
+        return fail("messages is empty")
+
+    runner = CommandRunner()
+
+    async def gen():
+
+        async def _run_claude_code_cmd():
+            # 判断用户是否有传入session
+            session_id = await run_in_threadpool(
+                lambda: _get_field_value(payload, request, "session_id")
+            )
+            # 没传入 生成默认的session_id
+            if not session_id:
+                session_id = str(uuid.uuid4())
+            # 数据库不存在视为全新的对话， 并创建工作目录
+            session = repo.get_session_by_alias(session_id)
+            if session is None:
+                workspace_path = f"{ROOT_SAVE_PATH}/workspace/{_secure_rand_str()}"
+                os.makedirs(workspace_path, exist_ok=True)
+                session = repo.create_session(
+                    session_alias=session_id,
+                    workspace_path=workspace_path,
+                )
+                cc_session_id = ""
+                await write_file_async(Path(f"{workspace_path}/CLAUDE.md"), claude_md_str)
+            else:
+                workspace_path = session.workspace_path
+                cc_session_id = session.session_id
+
+            yield sse_message("session_id", {"session_id": session_id, "workspace_path": workspace_path})
+
+            # 保存附件文件
+            file_paths = await _save_attachments(files, workspace_path)
+            # 判断是否是plan模式
+            is_plan = True if payload.action == "plan" else False
+            claude_code_cmd = await run_in_threadpool(
+                lambda: _build_claude_command(
+                    user_prompt + " " + ",".join(file_paths) + " ,当前的工作目录是：" + workspace_path, cc_session_id,
+                    system_prompt, is_plan_mode=is_plan)
+            )
+
+            log_info(claude_code_cmd)
+            # 判断是否传max_thinking_token
+            max_thinking_token = 0
+            if hasattr(payload, "max_thinking_token") and isinstance(payload.max_thinking_token, int):
+                max_thinking_token = payload.max_thinking_token
+
+            # fix 旧逻辑model传在线沙盒id，如果model以302-sandbox-开头，直接先使用环境默认变量里的模型
+            model = settings.ANTHROPIC_DEFAULT_HAIKU_MODEL if payload.model.startswith(
+                "302-sandbox-") else payload.model
+
+            envs = {
+                "MAX_THINKING_TOKENS": str(max_thinking_token),
+                "BASH_DEFAULT_TIMEOUT_MS": "600000",
+                "BASH_MAX_TIMEOUT_MS": "1200000",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL": model,
+                "CLAUDE_CODE_SUBAGENT_MODEL": model
+            }
+            is_save_session = False
+            run_id: Optional[str] = None
+            try:
+                async for ev in runner.stream(
+                        claude_code_cmd,
+                        cwd=workspace_path,
+                        env=envs,
+                        timeout=300,
+                ):
+                    if ev.get("event") == "start":
+                        run_id = ev.get("run_id")
+
+                    if await request.is_disconnected():
+                        if run_id:
+                            await runner.kill(run_id)
+                        break
+
+                    event = ev.get("event")
+                    if event == "start":
+                        yield sse_message(
+                            "start",
+                            {"run_id": ev["run_id"], "pid": ev["pid"], "command": ev["command"]},
+                        )
+                    elif event == "output":
+
+                        try:
+                            output_stream_json = json.loads(ev["text"])
+                            true_session_id = output_stream_json.get("session_id", "")
+                            if not is_save_session and true_session_id:
+                                # 第一次获取到CC真正的session_id,存一次
+                                session = await run_in_threadpool(
+                                    lambda: repo.bind_session_id(session.id, true_session_id)
+                                )
+                                is_save_session = True
+                                log_info(f"Updated session_id: {true_session_id}")
+                                log_info(
+                                    f"session id: {session.id}, workspace_path: {session.workspace_path}, note: {session.note}, alias: {session.session_alias}")
+                            # 最后result流再存一次
+                            if output_stream_json.get("type", "") == "result":
+                                session = await run_in_threadpool(
+                                    lambda: repo.bind_session_id(session.id, true_session_id)
+                                )
+                        except Exception as e:
+                            log_error(f"The operation stream-json stream failed： {e}")
+
+                        yield f"data: {ev['text']}\n\n"
+                        # yield sse_message("output", {"run_id": ev["run_id"], "text": ev["text"]})
+                    elif event == "error":
+                        yield sse_message("error", {"run_id": ev["run_id"], "error": ev.get("error")})
+                    elif event == "done":
+                        yield sse_message(
+                            "done",
+                            {"run_id": ev["run_id"], "exit_code": ev.get("exit_code"), "lines": ev.get("lines")},
+                        )
+            finally:
+                if run_id:
+                    await runner.cleanup(run_id)
+
+        async def _run_custom_cmd():
+            cmd_data = parse_command_result.data
+            command = cmd_data.command
+            work_path = cmd_data.cwd
+            envs = cmd_data.envs or {}
+            user = cmd_data.user or "user"
+
+            run_id: Optional[str] = None
+            try:
+                async for ev in runner.stream(
+                        command,
+                        cwd=work_path,
+                        env=envs,
+                        timeout=300,
+                ):
+                    if ev.get("event") == "start":
+                        run_id = ev.get("run_id")
+
+                    if await request.is_disconnected():
+                        if run_id:
+                            await runner.kill(run_id)
+                        break
+
+                    event = ev.get("event")
+                    if event == "start":
+                        yield sse_message(
+                            "start",
+                            {"run_id": ev["run_id"], "pid": ev["pid"], "command": ev["command"]},
+                        )
+                    elif event == "output":
+                        yield f"data: {ev['text']}\n\n"
+                        # yield sse_message("output", {"run_id": ev["run_id"], "text": ev["text"]})
+                    elif event == "error":
+                        yield sse_message("error", {"run_id": ev["run_id"], "error": ev.get("error")})
+                    elif event == "done":
+                        yield sse_message(
+                            "done",
+                            {"run_id": ev["run_id"], "exit_code": ev.get("exit_code"), "lines": ev.get("lines")},
+                        )
+            finally:
+                if run_id:
+                    await runner.cleanup(run_id)
+
+        async def _run_deploy_cmd():
+            # 判断用户是否有传入session
+            session_id = await run_in_threadpool(
+                lambda: _get_field_value(payload, request, "session_id")
+            )
+            # 没传入 生成默认的session_id
+            if not session_id:
+                yield f"event: error\ndata: Missing session_id \n\n"
+                return
+            session = repo.get_session_by_alias(session_id)
+            if session is None:
+               yield f"event: error\ndata: Not found session_id: {session_id} \n\n"
+               return
+            workspace_path = session.workspace_path
+            yield "data: wait for pre deployment preparation ...\n \n\n"
+            if parse_command_result.data.envs:
+                env_content = "\n".join(
+                    f"{key}={value}"
+                    for key, value in parse_command_result.data.envs.items()
+                )
+                await write_file_async(Path(f"{workspace_path}/.env"), env_content)
+            yield "data: start deploy ...\n \n\n"
+            # 用户使用自己的vercel key
+            if parse_command_result.data.vercel_key:
+                project_name =parse_command_result.data.project_name or _secure_rand_str()
+
+                vercel_line_result = await runner.exec_json(
+                    command=f"vercel link --project {project_name} --token={parse_command_result.data.vercel_key} --yes",
+                    cwd=workspace_path
+                )
+                if vercel_line_result.exit_code != 0:
+                    yield f"event: error\ndata: Failed to deploy: {vercel_line_result.stderr}\n \n\n"
+                    return
+                deploy_result = await runner.exec_json(
+                    command=f"vercel --prod --token={parse_command_result.data.vercel_key} --yes",
+                    cwd=workspace_path
+                )
+                if deploy_result.exit_code != 0:
+                    yield f"Failed to deploy: {deploy_result.stderr}"
+                    return
+                resp = {"success": True, "status": "success", "id": "", "url": deploy_result.stdout, "cover": ""}
+                yield f"data: **deploy sandbox successfully**\ndata: {resp}\n \n\n"
+            else:
+                AI302_API_KEY = os.environ.get("AI302_API_KEY", "")
+                if not AI302_API_KEY:
+                    yield f"event: error\ndata: Missing AI302_API_KEY \n\n"
+                    return
+
+                zip_path = await run_in_threadpool(
+                    lambda: create_zip_from_directory(workspace_path, exclude_patterns=EXCLUDE_PATTERNS)
+                )
+
+                if zip_path.stat().st_size > 20 * 1024 * 1024:
+                    yield f"event: error\ndata: The file data is too large and exceeds the size limit of the 302.ai deployment interface\n \n\n"
+                    return
+
+                try:
+                    headers = {'Authorization': f"Bearer {AI302_API_KEY}"}
+                    create_deploy_task_resp = await _create_302ai_deploy_task(zip_path, headers=headers)
+                    deploy_project_id = create_deploy_task_resp["id"]
+                    yield f"data: create deploy task: {deploy_project_id}\n \n\n"
+                    for _ in range(30):
+                        await asyncio.sleep(10)
+                        yield f"data: wait for deploy task ...\n \n\n"
+                        deploy_result = await fetch_json_with_retry("GET",
+                                                                    f"https://api.302.ai/302/webserve/project?project_id={deploy_project_id}",
+                                                                    headers=headers)
+                        if deploy_result["success"]:
+                            if deploy_result["status"] == "success":
+                                resp = {"success": True, "status": "success", "id": deploy_project_id, "url": deploy_result["url"], "cover": ""}
+                                yield f"data: **deploy sandbox successfully**\ndata: {resp}\n \n\n"
+                                return
+                        else:
+                            yield f"event: error\ndata: **deploy sandbox failed**\n{deploy_result['error']}\n \n\n"
+                            return
+                    yield f"event: error\ndata: **deploy sandbox failed**Wait for a timeout\n \n\n"
+                    return
+                except Exception as e:
+                    yield f"event: error\ndata: **deploy sandbox failed**{e} \n\n"
+                    return
+
+        # 处理messages
+        system_prompt, user_prompt, last_user_prompt, files = await run_in_threadpool(
+            lambda: _extract_prompts(payload.messages)
+        )
+
+        request_headers = dict(request.headers)
+        if hasattr(payload, "session_id") and payload.session_id:
+            request_headers["session_id"] = payload.session_id
+        parse_command_result = await parse_command_from_message(user_prompt, request_headers)
+        log_info(f"parse_command_result: {parse_command_result}")
+        # 用户输入了预设的斜杠命令
+        if parse_command_result:
+            if parse_command_result.command_type == CommandType.COMMAND:
+                async for chunk in _run_custom_cmd():
+                    yield chunk
+            elif parse_command_result.command_type == CommandType.DEPLOY:
+                async for chunk in _run_deploy_cmd():
+                    log_info(chunk)
+                    yield chunk
+        else:
+            async for chunk in _run_claude_code_cmd():
+                yield chunk
+
+
+
+
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _secure_rand_str(n=10):
+    alphabet = string.ascii_lowercase + string.digits  # a-z + 0-9
+    return ''.join(secrets.choice(alphabet) for _ in range(n))
+
+
+def _get_field_value(payload: BaseModel, request: Request, field_name: str, default: str = "") -> str:
+        """
+        优先从 payload 获取字段值，其次从 headers 获取，都不存在返回默认值
+
+        Args:
+            payload: Pydantic 模型实例
+            request: FastAPI Request 对象
+            field_name: 字段名称
+            default: 默认值，默认为空字符串
+
+        Returns:
+            字段值或默认值
+        """
+        # 1. 优先从 payload 获取
+        value = getattr(payload, field_name, None)
+        if value is not None and value != "":
+            return str(value) if not isinstance(value, str) else value
+
+        # 2. 从 headers 获取（headers 通常用 X- 前缀或 - 连接）
+        # 尝试多种 header 命名格式
+        header_variants = [
+            field_name,  # 原始名称: user_id
+            field_name.replace("_", "-"),  # 下划线转横线: user-id
+            f"X-{field_name}",  # 加 X- 前缀: X-user_id
+            f"X-{field_name.replace('_', '-')}",  # X- 前缀 + 横线: X-user-id
+        ]
+
+        for header_name in header_variants:
+            header_value = request.headers.get(header_name)
+            if header_value is not None and header_value != "":
+                return header_value
+
+        # 3. 都不存在返回默认值
+        return default
+
+
+def _extract_prompts(messages: List[Message]) -> Tuple[Optional[str], str, str, List[dict]]:
+    """
+    从消息列表中提取系统提示词、用户提示词、上次用户提示词和图片URL列表
+    用户提示词必定存在，没有user角色时取最后一条
+    如果previous_user_prompt是命令（/deploy /model /command开头），则继续向上查找
+
+    Returns:
+        Tuple[Optional[str], str, str, List[dict]]: (系统提示词, 用户提示词, 上次用户提示词, 图片列表)
+    """
+    if not messages:
+        raise ValueError("消息列表不能为空")
+
+    def extract_content(content: Union[str, List]) -> Tuple[str, List[str]]:
+        """提取文本和图片URL"""
+        if isinstance(content, str):
+            return content, []
+
+        texts = []
+        images = []
+
+        for item in content:
+            # 兼容dict和Pydantic模型
+            if hasattr(item, 'model_dump'):
+                item = item.model_dump()
+
+            if isinstance(item, dict):
+                if item.get("type") == "text":
+                    texts.append(item.get("text", ""))
+                elif item.get("type") == "image_url":
+                    url = item.get("image_url", {}).get("url", "")
+                    if url:
+                        images.append(item)
+
+        return " ".join(texts) if texts else "", images
+
+    def is_command(text: str) -> bool:
+        """检查文本是否是命令"""
+        commands = ['/deploy', '/model', '/command', '/max_thinking_token']
+        return any(text.strip().startswith(cmd) for cmd in commands)
+
+    def find_previous_non_command_prompt(user_messages: List[Message], start_index: int) -> str:
+        """从指定索引开始向前查找非命令的用户提示词"""
+        for i in range(start_index, -1, -1):
+            text, _ = extract_content(user_messages[i].content)
+            if not is_command(text):
+                return text
+        return ""
+
+    # 只有一条消息时
+    if len(messages) == 1:
+        text, images = extract_content(messages[0].content)
+        return None, text, "", images  # 上次用户提示词为空
+
+    # 提取系统提示词（只取文本部分）
+    system_prompt = None
+    for msg in messages:
+        if msg.role == "system":
+            system_prompt, _ = extract_content(msg.content)
+            break
+
+    # 提取用户提示词和图片
+    user_messages = [msg for msg in messages if msg.role == "user"]
+
+    # 初始化返回值
+    user_prompt = ""
+    previous_user_prompt = ""
+    images = []
+
+    if user_messages:
+        # 获取最后一条用户消息
+        user_prompt, images = extract_content(user_messages[-1].content)
+
+        # 如果有多条用户消息，查找上一条非命令的用户提示词
+        if len(user_messages) >= 2:
+            # 从倒数第二条开始向前查找
+            previous_user_prompt = find_previous_non_command_prompt(user_messages, len(user_messages) - 2)
+    else:
+        # 没有user角色时取最后一条
+        user_prompt, images = extract_content(messages[-1].content)
+
+    return system_prompt, user_prompt, previous_user_prompt, images
+
+
+def _safe_filename(name: str) -> str:
+    name = (name or "").strip().replace("\\", "_").replace("/", "_")
+    name = re.sub(r"[^0-9A-Za-z._-]+", "_", name)
+    name = name.strip("._")
+    return name or f"file_{uuid.uuid4().hex}"
+
+def _guess_ext(content: bytes, mime: str | None = None) -> str:
+    if mime:
+        ext = _MIME_TO_EXT.get(mime.lower())
+        if ext:
+            return ext
+        ext = mimetypes.guess_extension(mime.lower())
+        if ext:
+            return ext
+
+    return ""  # 实在识别不了就不加后缀
+
+def _parse_file_item(file: dict) -> tuple[bytes, str | None, str | None]:
+    """
+    返回: (content_bytes, mime, suggested_name)
+    支持:
+      - {"image_url": {"url": "http(s)://..."}}
+      - {"image_url": {"url": "data:...;base64,...."}}
+      - {"image_url": {"url": "<pure base64>"}}
+    也兼容:
+      - file.get("filename") / file.get("name")
+    """
+    file_content = (file.get("image_url", {}) or {}).get("url", "") or ""
+    suggested_name = file.get("filename") or file.get("name")
+
+    if file_content.startswith(("http://", "https://")):
+        return None, None, suggested_name  # 让调用方去下载并再做后缀处理
+
+    _DATA_URL_RE = re.compile(
+        r"^data:(?P<mime>[-\w.+/]+)?(?:;charset=[-\w]+)?;base64,(?P<data>.+)$",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    m = _DATA_URL_RE.match(file_content)
+    if m:
+        mime = m.group("mime") or None
+        encoded = m.group("data")
+        try:
+            content = base64.b64decode(encoded, validate=True)
+        except binascii.Error:
+            # 有些 data url 会包含换行/空格等
+            content = base64.b64decode(encoded)
+        return content, mime, suggested_name
+
+    # 纯 base64
+    encoded = file_content
+    try:
+        content = base64.b64decode(encoded, validate=True)
+    except binascii.Error:
+        content = base64.b64decode(encoded)
+    return content, None, suggested_name
+
+def _build_claude_command(
+        user_prompt: str,
+        session_id: str = "",
+        system_prompt: Optional[str] = None,
+        output_format: str = "stream-json",
+        is_plan_mode: bool = False,
+) -> str:
+    """
+    构建 Claude 命令行
+
+    Args:
+        user_prompt: 用户提示词
+        llm_model: LLM 模型名称
+        session_id: 会话 ID（可选）
+        system_prompt: 系统提示词（可选）
+        output_format: 输出格式 (json/stream-json)
+        is_plan_mode: 是否开启plan模式
+
+    Returns:
+        完整的命令字符串
+    """
+
+    # 构建命令列表（使用列表而不是字符串拼接）
+    command_parts = []
+
+    # 使用 printf 而不是 echo，更好地处理特殊字符
+    # 或者使用 here-document 方式
+    # 如果是plan模式，需要关掉--dangerously-skip-permissions
+    if is_plan_mode:
+        command_parts.extend([
+            "printf", "%s", shlex.quote(user_prompt),
+            "|", "claude", "-p",
+            "--permission-mode", "plan",
+            "--output-format", shlex.quote(output_format),
+            "--verbose"
+        ])
+    else:
+        command_parts.extend([
+            "printf", "%s", shlex.quote(user_prompt),
+            "|", "claude", "-p",
+            "--dangerously-skip-permissions", "true",
+            "--output-format", shlex.quote(output_format),
+            "--verbose"
+        ])
+
+    if output_format == "stream-json":
+        command_parts.append("--include-partial-messages")
+
+    if session_id and session_id.strip():
+        command_parts.extend(["--resume", shlex.quote(session_id)])
+
+    if system_prompt and system_prompt.strip():
+        command_parts.extend(["--system-prompt", shlex.quote(system_prompt)])
+
+    return " ".join(command_parts)
+
+async def _save_attachments(files, workspace_path):
+    attachment_path = f"{workspace_path}/.302ai/attachments"
+    os.makedirs(attachment_path, exist_ok=True)
+
+    saved = []
+    if not files:
+        return saved
+
+    for idx, file in enumerate(files):
+        try:
+            file_content = (file.get("image_url", {}) or {}).get("url", "") or ""
+            suggested_name = file.get("filename") or file.get("name")
+
+            if file_content.startswith(("http://", "https://")):
+                # 从 URL 下载
+                content = await download_file_from_url(file_content)
+                # 尝试用 URL 路径名做文件名
+                path_name = os.path.basename(urlparse(file_content).path) or None
+                base = _safe_filename(os.path.splitext(path_name or suggested_name or f"file_{idx}")[0])
+                ext = os.path.splitext(path_name or "")[1]
+                if not ext:
+                    ext = _guess_ext(content, None)
+                filename = base + ext
+            else:
+                # base64 / data url
+                content, mime, suggested_name2 = _parse_file_item(file)
+                base = _safe_filename(os.path.splitext(suggested_name2 or f"file_{idx}")[0])
+                ext = os.path.splitext(suggested_name2 or "")[1] or _guess_ext(content, mime)
+                filename = base + ext
+
+            full_path = os.path.join(attachment_path, filename)
+
+            # 避免重名覆盖：自动加后缀
+            if os.path.exists(full_path):
+                stem, ext2 = os.path.splitext(filename)
+                full_path = os.path.join(attachment_path, f"{stem}_{uuid.uuid4().hex[:8]}{ext2}")
+
+            with open(full_path, "wb") as f:
+                f.write(content)
+
+            saved.append(full_path)
+
+        except Exception as e:
+            return
+
+    return saved
+
+
+async def _create_302ai_deploy_task(
+        zip_path: Path,
+        session: aiohttp.ClientSession | None = None,
+        headers: dict | None = None,
+):
+    """上传 zip 文件，确保文件正确关闭"""
+
+    # 使用 with 确保文件关闭
+    with open(zip_path, 'rb') as f:
+        form_data = aiohttp.FormData()
+        form_data.add_field(
+            name='project_file',
+            value=f,
+            filename=zip_path.name,
+            content_type='application/zip'
+        )
+
+        response = await fetch_json_with_retry(
+            'POST',
+            "https://api.302.ai/302/webserve/project",
+            session=session,
+            data=form_data,
+            headers=headers
+        )
+
+    return response
