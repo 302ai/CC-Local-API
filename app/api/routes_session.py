@@ -148,15 +148,15 @@ async def init_project(payload: ProjectInitRequest, repo: SessionRepository = De
     workspace_path = f"{ROOT_SAVE_PATH}/workspace/{_secure_rand_str()}" if not payload.workspace_path else payload.workspace_path
 
     def op():
-        if repo.get_session_by_alias(payload.session_id) is not None:
-            return False, "session already exist"
+        with repo.atomic():
+            if repo.get_session_by_alias(payload.session_id) is not None:
+                return False, "session already exist"
 
+            repo.create_session(
+                session_alias=payload.session_id,
+                workspace_path=workspace_path,
+            )
 
-
-        repo.create_session(
-            session_alias=payload.session_id,
-            workspace_path=workspace_path,
-        )
         return True, "session created"
 
     is_success, msg = await run_in_threadpool(op)
@@ -185,13 +185,13 @@ async def get_session(limit: int = Query(50, description="每页数量"),
 
 @router.post("/session")
 async def update_session(payload: SessionUpdateRequest, repo: SessionRepository = Depends(get_session_repo)):
-
     def op():
-        session = repo.get_session_by_alias(payload.session_id)
-        if session is None:
-            return False, "session does not exist"
-        repo.update_session(session.id, note=payload.note)
-        return True, "session updated"
+        with repo.atomic():
+            session = repo.get_session_by_alias(payload.session_id)
+            if session is None:
+                return False, "session does not exist"
+            repo.update_session(session.id, note=payload.note)
+            return True, "session updated"
 
     is_success, msg = await run_in_threadpool(op)
     if not is_success:
@@ -202,11 +202,12 @@ async def update_session(payload: SessionUpdateRequest, repo: SessionRepository 
 @router.delete("/session")
 async def delete_session(payload: SessionDeleteRequest, repo: SessionRepository = Depends(get_session_repo)):
     def op():
-        session = repo.get_session_by_alias(payload.session_id)
-        if session is None:
-            return False, "session does not exist"
-        repo.delete_session(session.id)
-        return True, session.workspace_path
+        with repo.atomic():
+            session = repo.get_session_by_alias(payload.session_id)
+            if session is None:
+                return False, "session does not exist"
+            repo.delete_session(session.id)
+            return True, session.workspace_path
 
     is_success, msg = await run_in_threadpool(op)
     if not is_success:
@@ -217,14 +218,14 @@ async def delete_session(payload: SessionDeleteRequest, repo: SessionRepository 
 
 
 @router.post("/create")
-async def test_create_sandbox():
+async def mock_create_sandbox():
     return ok({"data": {
         "sandbox_id": "302-sandbox-123456",
         "sandbox_name": "xxxxxxxxxxx"
     }})
 
 @router.get("/list")
-async def test_list_sandbox(repo: SessionRepository = Depends(get_session_repo)):
+async def mock_list_sandbox(repo: SessionRepository = Depends(get_session_repo)):
 
     def op():
         return repo.list_sessions()

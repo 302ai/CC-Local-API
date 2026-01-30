@@ -219,19 +219,20 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
             if not session_id:
                 session_id = str(uuid.uuid4())
             # 数据库不存在视为全新的对话， 并创建工作目录
-            session = repo.get_session_by_alias(session_id)
-            if session is None:
-                workspace_path = f"{ROOT_SAVE_PATH}/workspace/{_secure_rand_str()}"
-                os.makedirs(workspace_path, exist_ok=True)
-                session = repo.create_session(
-                    session_alias=session_id,
-                    workspace_path=workspace_path,
-                )
-                cc_session_id = ""
-                await write_file_async(Path(f"{workspace_path}/CLAUDE.md"), claude_md_str)
-            else:
-                workspace_path = session.workspace_path
-                cc_session_id = session.session_id
+            with repo.atomic():
+                session = repo.get_session_by_alias(session_id)
+                if session is None:
+                    workspace_path = f"{ROOT_SAVE_PATH}/workspace/{_secure_rand_str()}"
+                    os.makedirs(workspace_path, exist_ok=True)
+                    session = repo.create_session(
+                        session_alias=session_id,
+                        workspace_path=workspace_path,
+                    )
+                    cc_session_id = ""
+                    await write_file_async(Path(f"{workspace_path}/CLAUDE.md"), claude_md_str)
+                else:
+                    workspace_path = session.workspace_path
+                    cc_session_id = session.session_id
 
             yield sse_message("session_id", {"session_id": session_id, "workspace_path": workspace_path})
 
@@ -299,23 +300,26 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                         )
                     elif event == "output":
 
+                        def bind_op(sid, true_sid):
+                            def op():
+                                with repo.atomic():
+                                    return repo.bind_session_id(sid, true_sid)
+
+                            return op
+
                         try:
                             output_stream_json = json.loads(ev["text"])
                             true_session_id = output_stream_json.get("session_id", "")
                             if not is_save_session and true_session_id:
                                 # 第一次获取到CC真正的session_id,存一次
-                                session = await run_in_threadpool(
-                                    lambda: repo.bind_session_id(session.id, true_session_id)
-                                )
+                                session = await run_in_threadpool(bind_op(session.id, true_session_id))
                                 is_save_session = True
                                 log_info(f"Updated session_id: {true_session_id}")
                                 log_info(
                                     f"session id: {session.id}, workspace_path: {session.workspace_path}, note: {session.note}, alias: {session.session_alias}")
                             # 最后result流再存一次
                             if output_stream_json.get("type", "") == "result":
-                                session = await run_in_threadpool(
-                                    lambda: repo.bind_session_id(session.id, true_session_id)
-                                )
+                                session = await run_in_threadpool(bind_op(session.id, true_session_id))
                         except Exception as e:
                             log_error(f"The operation stream-json stream failed： {e}")
 
