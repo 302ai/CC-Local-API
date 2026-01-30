@@ -1,0 +1,24 @@
+services:
+  local-cc-api:
+    build: .
+    container_name: local-cc-api
+    ports:
+      - "8000:8000"
+    environment:
+      # sqlite file path inside container
+      - DB_SQLITE_PATH=/home/user/db/app.db
+      - ROOT_SAVE_PATH=/home/user
+      # set these as needed
+      - ANTHROPIC_BASE_URL=https://api.302.ai
+      - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN}
+      - ANTHROPIC_DEFAULT_HAIKU_MODEL=gpt-5.2
+      - ANTHROPIC_DEFAULT_OPUS_MODEL=gpt-5.2
+      - ANTHROPIC_DEFAULT_SONNET_MODEL=gpt-5.2
+      - CLAUDE_CODE_SUBAGENT_MODEL=gpt-5.2
+      # option (for deploy)
+      - AI302_API_KEY=${AI302_API_KEY}
+    volumes:
+      # if you also want to persist your app-level working data, mount a host dir
+      - ${LOCAL_SAVE_PATH}:/home/user
+
+    restart: unless-stopped
