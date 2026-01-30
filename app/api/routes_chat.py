@@ -252,17 +252,27 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                 max_thinking_token = payload.max_thinking_token
 
             # fix 旧逻辑model传在线沙盒id，如果model以302-sandbox-开头，直接先使用环境默认变量里的模型
-            model = settings.ANTHROPIC_DEFAULT_HAIKU_MODEL if payload.model.startswith(
+            # 现在线上版本的逻辑是四个模型参数全用同一个模型  这里也保持一致
+            haiku_model = settings.ANTHROPIC_DEFAULT_HAIKU_MODEL if payload.model.startswith(
+                "302-sandbox-") else payload.model
+
+            opus_model = settings.ANTHROPIC_DEFAULT_OPUS_MODEL if payload.model.startswith(
+                "302-sandbox-") else payload.model
+
+            sonnet_model = settings.ANTHROPIC_DEFAULT_SONNET_MODEL if payload.model.startswith(
+                "302-sandbox-") else payload.model
+
+            subagent_model = settings.CLAUDE_CODE_SUBAGENT_MODEL if payload.model.startswith(
                 "302-sandbox-") else payload.model
 
             envs = {
                 "MAX_THINKING_TOKENS": str(max_thinking_token),
                 "BASH_DEFAULT_TIMEOUT_MS": "600000",
                 "BASH_MAX_TIMEOUT_MS": "1200000",
-                "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
-                "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
-                "ANTHROPIC_DEFAULT_HAIKU_MODEL": model,
-                "CLAUDE_CODE_SUBAGENT_MODEL": model
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": opus_model,
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": sonnet_model,
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL": haiku_model,
+                "CLAUDE_CODE_SUBAGENT_MODEL": subagent_model
             }
             is_save_session = False
             run_id: Optional[str] = None

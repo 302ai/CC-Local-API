@@ -6,12 +6,15 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Settings:
-    APP_NAME: str = os.getenv("APP_NAME", "fastapi-peewee-skeleton")
-    DB_SQLITE_PATH: str = os.getenv("DB_SQLITE_PATH", "app.db")
-    ROOT_SAVE_PATH: str = os.getenv("ROOT_SAVE_PATH", r"C:\Users\hjj\Desktop\222")
+    APP_NAME: str = os.getenv("APP_NAME", "cc_local_api")
+    DB_SQLITE_PATH: str = os.getenv("DB_SQLITE_PATH", "/home/user/db/app.db")
+    ROOT_SAVE_PATH: str = os.getenv("ROOT_SAVE_PATH", "/home/user")
 
     ANTHROPIC_BASE_URL: str = os.getenv("ANTHROPIC_BASE_URL", "https://api.302.ai")
     ANTHROPIC_DEFAULT_HAIKU_MODEL: str = os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "gpt-5.2")
+    ANTHROPIC_DEFAULT_OPUS_MODEL: str = os.getenv("ANTHROPIC_DEFAULT_OPUS_MODEL", "gpt-5.2")
+    ANTHROPIC_DEFAULT_SONNET_MODEL: str = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "gpt-5.2")
+    CLAUDE_CODE_SUBAGENT_MODEL: str = os.getenv("CLAUDE_CODE_SUBAGENT_MODEL", "gpt-5.2")
     ANTHROPIC_AUTH_TOKEN: str = os.getenv("ANTHROPIC_AUTH_TOKEN")
 
 
