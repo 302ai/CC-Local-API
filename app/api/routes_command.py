@@ -23,7 +23,7 @@ def sse_message(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {__import__('json').dumps(data, ensure_ascii=False)}\n\n"
 
 
-@router.post("/execute")
+@router.post("/commands")
 async def execute_command(payload: CommandRequest):
     runner = CommandRunner()
     result = await runner.exec_json(
@@ -42,7 +42,7 @@ async def execute_command(payload: CommandRequest):
     )
 
 
-@router.post("/execute/stream")
+@router.post("/commands/stream")
 async def execute_command_stream(payload: CommandRequest, request: Request):
     runner = CommandRunner()
 
