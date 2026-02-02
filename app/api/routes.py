@@ -13,6 +13,8 @@ from app.api.routes_mcp import router as mcp_router
 SANDBOX_PREFIX = "/302/claude-code/sandbox"
 CC_PREFIX = "/302/claude-code"
 
+CHAT_PREFIX = "/api/v1"
+
 
 sandbox_router = APIRouter(prefix=SANDBOX_PREFIX, tags=["Sandbox"])
 
@@ -20,10 +22,12 @@ sandbox_router = APIRouter(prefix=SANDBOX_PREFIX, tags=["Sandbox"])
 
 cc_router = APIRouter(prefix=CC_PREFIX, tags=["Base"])
 
+chat_base_router = APIRouter(prefix=CHAT_PREFIX, tags=["Chat"])
+
 sandbox_router.include_router(common_router)
 sandbox_router.include_router(command_router)
 sandbox_router.include_router(file_router)
-cc_router.include_router(chat_router)
+chat_base_router.include_router(chat_router)
 sandbox_router.include_router(session_router)
 
 sandbox_router.include_router(mcp_router)

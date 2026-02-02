@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api.routes import cc_router, sandbox_router
+from app.api.routes import cc_router, sandbox_router, chat_base_router
 from app.core.config import settings
 from app.db.database import db_state_default
 from app.models.base import bind_models
@@ -26,3 +26,4 @@ app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 app.add_middleware(RequestIDMiddleware)
 app.include_router(cc_router)
 app.include_router(sandbox_router)
+app.include_router(chat_base_router)
