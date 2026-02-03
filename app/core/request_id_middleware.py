@@ -48,7 +48,8 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
             "/302/claude-code/messages",
             "/302/claude-code/skills/detail",
             "/302/claude-code/chat/completions",
-            "/302/claude-code/sandbox/execute/stream"
+            "/302/claude-code/sandbox/execute/stream",
+            "/api/v1/chat/completions"
         ]
         if request.url.path in stream_url_path:
             is_streaming = True
