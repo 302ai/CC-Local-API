@@ -1,15 +1,21 @@
 from __future__ import annotations
 
-
+import asyncio
 import math
 import os
 import secrets
 import shutil
 import string
+import traceback
+from typing import Dict
 
+import aiohttp
 from fastapi import APIRouter, Depends, Request, Query
 from app.api.response import fail, ok
+from app.core.ai302.deploy_ops import create_302ai_deploy_task, get_302ai_deploy_task_info
 from app.core.config import ROOT_SAVE_PATH
+from app.core.file_content import create_zip_from_directory
+from app.core.log import log_error
 from app.db.session import get_db, run_in_threadpool
 from app.repositories.session_repo import SessionRepository
 
@@ -120,6 +126,34 @@ _MIME_TO_EXT = {
     "application/x-python-code": ".py",
 }
 
+# 需要排除的目录和文件模式
+EXCLUDE_PATTERNS = {
+    "node_modules",
+    ".git",
+    ".svn",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "env",
+    "dist",
+    "build",
+    ".idea",
+    ".vscode",
+    ".DS_Store",
+    ".cache",
+    "coverage",
+    ".pytest_cache",
+    ".egg-info",
+    ".tox",
+    "target",
+    "vendor",
+    "bin",
+    "obj",
+    ".next",
+    ".nuxt",
+    "bower_components",
+}
+
 
 class ProjectInitRequest(BaseModel):
 
@@ -137,6 +171,12 @@ class SessionUpdateRequest(BaseModel):
 class SessionDeleteRequest(BaseModel):
 
     session_id: str = Field(..., description="实际是session_alias, 对外暴露成session_id，让用户接触不到真正的cc session_id")
+
+
+class SandboxDeployRequest(BaseModel):
+    sandbox_id: str
+    session_id: str = None
+    envs: Dict[str, str] =None
 
 
 def get_session_repo(db=Depends(get_db)) -> SessionRepository:
@@ -164,6 +204,45 @@ async def init_project(payload: ProjectInitRequest, repo: SessionRepository = De
         return fail(msg, status_code=400)
     os.makedirs(workspace_path, exist_ok=True)
     return ok({"workspace_path": workspace_path, "session_id": payload.session_id, "message": "Initialization succeeded"})
+
+
+@router.post("/deploy", description="封装302ai的异步部署接口成同步响应")
+async def do_deploy(payload: SandboxDeployRequest, repo: SessionRepository = Depends(get_session_repo)):
+    AI302_API_KEY = os.environ.get("AI302_API_KEY", "")
+    if not AI302_API_KEY:
+        return fail("AI302_API_KEY not set", status_code=400)
+
+    session = await run_in_threadpool(
+        lambda: repo.get_session_by_alias(payload.session_id)
+    )
+    if not session:
+        return fail("session does not exist", status_code=404)
+
+    zip_path = await run_in_threadpool(
+        lambda: create_zip_from_directory(session.workspace_path, exclude_patterns=EXCLUDE_PATTERNS)
+    )
+
+    if zip_path.stat().st_size > 20 * 1024 * 1024:
+        return fail("project zip file size is too large", status_code=400)
+    try:
+        headers = {'Authorization': f"Bearer {AI302_API_KEY}"}
+        create_deploy_task_resp = await create_302ai_deploy_task(zip_path, headers=headers)
+        deploy_project_id = create_deploy_task_resp["id"]
+
+        for _ in range(30):
+            await asyncio.sleep(10)
+            deploy_result = get_302ai_deploy_task_info(deploy_project_id, headers=headers)
+            if deploy_result["success"]:
+                if deploy_result["status"] == "success":
+                    return deploy_result
+            else:
+                return deploy_result
+
+        return fail("Wait for deployment timeout, However, the deployment task was submitted successfully",
+                    status_code=400, payload={"deploy_tas_id": deploy_project_id})
+    except Exception as e:
+        return fail(str(e))
+
 
 
 @router.get("/session")

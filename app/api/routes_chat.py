@@ -22,6 +22,7 @@ from starlette.responses import StreamingResponse
 
 from app.api.response import fail, ok
 from app.api.routes_command import sse_message
+from app.core.ai302.deploy_ops import create_302ai_deploy_task, get_302ai_deploy_task_info
 from app.core.command_parser import parse_command_from_message, CommandType
 from app.core.command_runner import CommandRunner
 from app.core.config import ROOT_SAVE_PATH, settings
@@ -464,15 +465,11 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
 
                 try:
                     headers = {'Authorization': f"Bearer {AI302_API_KEY}"}
-                    create_deploy_task_resp = await _create_302ai_deploy_task(zip_path, headers=headers)
+                    create_deploy_task_resp = await create_302ai_deploy_task(zip_path, headers=headers)
                     deploy_project_id = create_deploy_task_resp["id"]
-                    # yield f"data: create deploy task: {deploy_project_id}\n \n\n"
                     for _ in range(30):
                         await asyncio.sleep(10)
-                        # yield f"data: wait for deploy task ...\n \n\n"
-                        deploy_result = await fetch_json_with_retry("GET",
-                                                                    f"https://api.302.ai/302/webserve/project?project_id={deploy_project_id}",
-                                                                    headers=headers)
+                        deploy_result = get_302ai_deploy_task_info(deploy_project_id, headers=headers)
                         if deploy_result["success"]:
                             if deploy_result["status"] == "success":
                                 resp = {"success": True, "status": "success", "id": deploy_project_id, "url": deploy_result["url"], "cover": ""}
@@ -806,29 +803,3 @@ async def _save_attachments(files, workspace_path):
     return saved
 
 
-async def _create_302ai_deploy_task(
-        zip_path: Path,
-        session: aiohttp.ClientSession | None = None,
-        headers: dict | None = None,
-):
-    """上传 zip 文件，确保文件正确关闭"""
-
-    # 使用 with 确保文件关闭
-    with open(zip_path, 'rb') as f:
-        form_data = aiohttp.FormData()
-        form_data.add_field(
-            name='project_file',
-            value=f,
-            filename=zip_path.name,
-            content_type='application/zip'
-        )
-
-        response = await fetch_json_with_retry(
-            'POST',
-            "https://api.302.ai/302/webserve/project",
-            session=session,
-            data=form_data,
-            headers=headers
-        )
-
-    return response
