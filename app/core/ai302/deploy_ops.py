@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import aiohttp
@@ -9,6 +10,7 @@ async def create_302ai_deploy_task(
         zip_path: Path,
         session: aiohttp.ClientSession | None = None,
         headers: dict | None = None,
+        env: dict | None = None
 ):
     """上传 zip 文件，确保文件正确关闭"""
 
@@ -21,6 +23,13 @@ async def create_302ai_deploy_task(
             filename=zip_path.name,
             content_type='application/zip'
         )
+
+        if env:
+            form_data.add_field(
+                name='env',
+                value=json.dumps(env),
+                content_type='application/json'
+            )
 
         response = await fetch_json_with_retry(
             'POST',

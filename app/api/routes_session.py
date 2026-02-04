@@ -174,8 +174,8 @@ class SessionDeleteRequest(BaseModel):
 
 
 class SandboxDeployRequest(BaseModel):
-    sandbox_id: str
-    session_id: str = None
+    sandbox_id: str = Field(None, description="兼容在线版本的接口，没有实际意义")
+    session_id: str = Field(..., description="实际是session_alias, 对外暴露成session_id，让用户接触不到真正的cc session_id")
     envs: Dict[str, str] =None
 
 
@@ -226,7 +226,7 @@ async def do_deploy(payload: SandboxDeployRequest, repo: SessionRepository = Dep
         return fail("project zip file size is too large", status_code=400)
     try:
         headers = {'Authorization': f"Bearer {AI302_API_KEY}"}
-        create_deploy_task_resp = await create_302ai_deploy_task(zip_path, headers=headers)
+        create_deploy_task_resp = await create_302ai_deploy_task(zip_path, headers=headers, env=payload.envs)
         deploy_project_id = create_deploy_task_resp["id"]
 
         for _ in range(30):
