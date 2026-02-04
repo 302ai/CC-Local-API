@@ -283,7 +283,7 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                         claude_code_cmd,
                         cwd=workspace_path,
                         env=envs,
-                        timeout=300,
+                        timeout=1800,
                 ):
                     if ev.get("event") == "start":
                         run_id = ev.get("run_id")
@@ -380,7 +380,7 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                         command,
                         cwd=work_path,
                         env=envs,
-                        timeout=300,
+                        timeout=600,
                 ):
                     if ev.get("event") == "start":
                         run_id = ev.get("run_id")
