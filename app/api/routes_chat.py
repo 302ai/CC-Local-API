@@ -469,7 +469,7 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                     deploy_project_id = create_deploy_task_resp["id"]
                     for _ in range(30):
                         await asyncio.sleep(10)
-                        deploy_result = get_302ai_deploy_task_info(deploy_project_id, headers=headers)
+                        deploy_result = await get_302ai_deploy_task_info(deploy_project_id, headers=headers)
                         if deploy_result["success"]:
                             if deploy_result["status"] == "success":
                                 resp = {"success": True, "status": "success", "id": deploy_project_id, "url": deploy_result["url"], "cover": ""}

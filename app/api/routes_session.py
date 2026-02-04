@@ -231,7 +231,7 @@ async def do_deploy(payload: SandboxDeployRequest, repo: SessionRepository = Dep
 
         for _ in range(30):
             await asyncio.sleep(10)
-            deploy_result = get_302ai_deploy_task_info(deploy_project_id, headers=headers)
+            deploy_result = await get_302ai_deploy_task_info(deploy_project_id, headers=headers)
             if deploy_result["success"]:
                 if deploy_result["status"] == "success":
                     return deploy_result
