@@ -363,10 +363,6 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                         })
                     yield f"data: {deploy_check_info}\n\n"
 
-
-
-
-
         async def _run_custom_cmd():
             cmd_data = parse_command_result.data
             command = cmd_data.command
@@ -424,14 +420,14 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                yield f"event: error\ndata: Not found session_id: {session_id} \n\n"
                return
             workspace_path = session.workspace_path
-            yield "data: wait for pre deployment preparation ...\n \n\n"
+            # yield "data: wait for pre deployment preparation ...\n \n\n"
             if parse_command_result.data.envs:
                 env_content = "\n".join(
                     f"{key}={value}"
                     for key, value in parse_command_result.data.envs.items()
                 )
                 await write_file_async(Path(f"{workspace_path}/.env"), env_content)
-            yield "data: start deploy ...\n \n\n"
+            # yield "data: start deploy ...\n \n\n"
             # 用户使用自己的vercel key
             if parse_command_result.data.vercel_key:
                 project_name =parse_command_result.data.project_name or _secure_rand_str()
@@ -470,10 +466,10 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                     headers = {'Authorization': f"Bearer {AI302_API_KEY}"}
                     create_deploy_task_resp = await _create_302ai_deploy_task(zip_path, headers=headers)
                     deploy_project_id = create_deploy_task_resp["id"]
-                    yield f"data: create deploy task: {deploy_project_id}\n \n\n"
+                    # yield f"data: create deploy task: {deploy_project_id}\n \n\n"
                     for _ in range(30):
                         await asyncio.sleep(10)
-                        yield f"data: wait for deploy task ...\n \n\n"
+                        # yield f"data: wait for deploy task ...\n \n\n"
                         deploy_result = await fetch_json_with_retry("GET",
                                                                     f"https://api.302.ai/302/webserve/project?project_id={deploy_project_id}",
                                                                     headers=headers)
@@ -513,10 +509,6 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
         else:
             async for chunk in _run_claude_code_cmd():
                 yield chunk
-
-
-
-
 
     return StreamingResponse(
         gen(),
