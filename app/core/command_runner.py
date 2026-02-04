@@ -114,14 +114,14 @@ class CommandRunner:
             timeout: Optional[float] = 300.0,
             run_id: Optional[str] = None,
             chunk_fallback: bool = True,
-            heartbeat_interval: float = 5.0,  # 新增：心跳间隔
+            heartbeat_interval: float = 5.0,
     ) -> AsyncIterator[dict]:
         """Stream command output.
 
         Yields dict events:
         - {"event": "start", "run_id": ..., "pid": ..., "command": ...}
         - {"event": "output", "run_id": ..., "text": ...}
-        - {"event": "heartbeat", "run_id": ..., "elapsed": ...}  # 新增
+        - {"event": "heartbeat", "run_id": ..., "elapsed": ...}
         - {"event": "error", "run_id": ..., "error": ...}
         - {"event": "done", "run_id": ..., "exit_code": ...}
 
@@ -136,13 +136,14 @@ class CommandRunner:
             "stderr": asyncio.subprocess.STDOUT,
             "env": self.build_env(env),
             "cwd": cwd,
+            "limit": 1024 * 1024,  # 1MB 行限制，防止 ValueError
         }
         if not is_windows:
             kwargs["start_new_session"] = True
 
         proc: Optional[asyncio.subprocess.Process] = None
         start_time = asyncio.get_event_loop().time()
-        last_output_time = start_time  # 新增：记录最后输出时间
+        last_output_time = start_time
 
         try:
             proc = await asyncio.create_subprocess_shell(command, **kwargs)
@@ -162,6 +163,23 @@ class CommandRunner:
 
                 try:
                     line = await asyncio.wait_for(proc.stdout.readline(), timeout=1.0)
+                except ValueError:
+                    # 行太长超过 limit，回退到 chunk 读取
+                    try:
+                        chunk = await asyncio.wait_for(proc.stdout.read(8192), timeout=1.0)
+                        if chunk:
+                            text = self.decode_output(chunk)
+                            for part in text.splitlines():
+                                part = part.rstrip("\r\n")
+                                if part:
+                                    line_count += 1
+                                    last_output_time = asyncio.get_event_loop().time()
+                                    yield {"event": "output", "run_id": run_id, "text": part}
+                        continue
+                    except asyncio.TimeoutError:
+                        if proc.returncode is not None:
+                            break
+                        continue
                 except asyncio.TimeoutError:
                     # 检查是否需要发送心跳
                     if current_time - last_output_time >= heartbeat_interval:
@@ -170,7 +188,7 @@ class CommandRunner:
                             "run_id": run_id,
                             "elapsed": round(current_time - start_time, 1),
                         }
-                        last_output_time = current_time  # 重置计时器
+                        last_output_time = current_time
 
                     if chunk_fallback:
                         try:
@@ -184,7 +202,7 @@ class CommandRunner:
                                 part = part.rstrip("\r\n")
                                 if part:
                                     line_count += 1
-                                    last_output_time = asyncio.get_event_loop().time()  # 更新
+                                    last_output_time = asyncio.get_event_loop().time()
                                     yield {"event": "output", "run_id": run_id, "text": part}
                             continue
 
@@ -198,7 +216,7 @@ class CommandRunner:
                 text = self.decode_output(line).rstrip("\r\n")
                 if text:
                     line_count += 1
-                    last_output_time = asyncio.get_event_loop().time()  # 更新
+                    last_output_time = asyncio.get_event_loop().time()
                     yield {"event": "output", "run_id": run_id, "text": text}
 
             if proc.returncode is None:
