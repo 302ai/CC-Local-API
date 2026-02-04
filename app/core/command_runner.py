@@ -106,20 +106,22 @@ class CommandRunner:
             return CommandResult(exit_code=-1, stdout="", stderr="", error=f"Execution error: {e}")
 
     async def stream(
-        self,
-        command: str,
-        *,
-        cwd: Optional[str] = None,
-        env: Optional[Dict[str, str]] = None,
-        timeout: Optional[float] = 300.0,
-        run_id: Optional[str] = None,
-        chunk_fallback: bool = True,
+            self,
+            command: str,
+            *,
+            cwd: Optional[str] = None,
+            env: Optional[Dict[str, str]] = None,
+            timeout: Optional[float] = 300.0,
+            run_id: Optional[str] = None,
+            chunk_fallback: bool = True,
+            heartbeat_interval: float = 5.0,  # 新增：心跳间隔
     ) -> AsyncIterator[dict]:
         """Stream command output.
 
         Yields dict events:
         - {"event": "start", "run_id": ..., "pid": ..., "command": ...}
         - {"event": "output", "run_id": ..., "text": ...}
+        - {"event": "heartbeat", "run_id": ..., "elapsed": ...}  # 新增
         - {"event": "error", "run_id": ..., "error": ...}
         - {"event": "done", "run_id": ..., "exit_code": ...}
 
@@ -140,6 +142,7 @@ class CommandRunner:
 
         proc: Optional[asyncio.subprocess.Process] = None
         start_time = asyncio.get_event_loop().time()
+        last_output_time = start_time  # 新增：记录最后输出时间
 
         try:
             proc = await asyncio.create_subprocess_shell(command, **kwargs)
@@ -149,8 +152,10 @@ class CommandRunner:
 
             line_count = 0
             while True:
+                current_time = asyncio.get_event_loop().time()
+
                 if timeout:
-                    elapsed = asyncio.get_event_loop().time() - start_time
+                    elapsed = current_time - start_time
                     if elapsed > timeout:
                         yield {"event": "error", "run_id": run_id, "error": "Command timeout"}
                         break
@@ -158,6 +163,15 @@ class CommandRunner:
                 try:
                     line = await asyncio.wait_for(proc.stdout.readline(), timeout=1.0)
                 except asyncio.TimeoutError:
+                    # 检查是否需要发送心跳
+                    if current_time - last_output_time >= heartbeat_interval:
+                        yield {
+                            "event": "heartbeat",
+                            "run_id": run_id,
+                            "elapsed": round(current_time - start_time, 1),
+                        }
+                        last_output_time = current_time  # 重置计时器
+
                     if chunk_fallback:
                         try:
                             chunk = await asyncio.wait_for(proc.stdout.read(4096), timeout=0.2)
@@ -170,6 +184,7 @@ class CommandRunner:
                                 part = part.rstrip("\r\n")
                                 if part:
                                     line_count += 1
+                                    last_output_time = asyncio.get_event_loop().time()  # 更新
                                     yield {"event": "output", "run_id": run_id, "text": part}
                             continue
 
@@ -183,6 +198,7 @@ class CommandRunner:
                 text = self.decode_output(line).rstrip("\r\n")
                 if text:
                     line_count += 1
+                    last_output_time = asyncio.get_event_loop().time()  # 更新
                     yield {"event": "output", "run_id": run_id, "text": text}
 
             if proc.returncode is None:

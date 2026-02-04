@@ -10,6 +10,7 @@ import re
 import secrets
 import shlex
 import string
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Optional, List, Literal, Union, Tuple
@@ -298,6 +299,12 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                             "start",
                             {"run_id": ev["run_id"], "pid": ev["pid"], "command": ev["command"]},
                         )
+                    elif event == "heartbeat":
+                        heartbeat = json.dumps({
+                            "type": "heartbeat",
+                            "timestamp": time.time()
+                        })
+                        yield f"data: {heartbeat}\n\n"
                     elif event == "output":
 
                         def bind_op(sid, true_sid):
@@ -335,6 +342,30 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
             finally:
                 if run_id:
                     await runner.cleanup(run_id)
+
+            check_cmd = """find . -maxdepth 4 \( -path "./claude" -o -path "./claude/*" -o -path "./node_modules" -o -path "./node_modules/*" -o -path "./.git" -o -path "./.git/*" -o -path "./venv" -o -path "./venv/*" -o -path "./.venv" -o -path "./.venv/*" -o -path "./env" -o -path "./env/*" -o -path "./__pycache__" -o -path "./__pycache__/*" \) -prune -o -type f \( -name "package.json" -o -name "pnpm-lock.yaml" -o -name "yarn.lock" -o -name "package-lock.json" -o -name "next.config.*" -o -name "vite.config.*" -o -name "vue.config.*" -o -name "nuxt.config.*" -o -name "svelte.config.*" -o -name "astro.config.*" -o -name "remix.config.*" -o -name "angular.json" -o -name "gatsby-config.*" -o -path "./index.html" -o -path "*/public/index.html" -o -path "./server.js" -o -path "./app.js" -o -path "./index.js" -o -path "./main.js" -o -path "./server.ts" -o -path "./app.ts" -o -path "./index.ts" -o -path "./main.ts" -o -path "./src/index.js" -o -path "./src/index.ts" -o -path "./src/index.jsx" -o -path "./src/index.tsx" -o -path "./src/main.js" -o -path "./src/main.ts" -o -path "./src/main.jsx" -o -path "./src/main.tsx" -o -path "./src/App.vue" -o -path "./src/app.js" -o -path "./src/app.ts" -o -path "./src/app.jsx" -o -path "./src/app.tsx" -o -path "./src/server.js" -o -path "./src/server.ts" -o \( -path "./src/*" -a \( -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" -o -name "*.vue" \) \) \)"""
+
+            if payload.enable_pre_deploy_check:
+
+                pre_deploy_check_result = await runner.exec_json(command=check_cmd, cwd=workspace_path)
+                if pre_deploy_check_result.exit_code == 0:
+                    if pre_deploy_check_result.stdout:
+                        deploy_check_info = json.dumps({
+                            "type": "pre_deploy_check",
+                            "success": True,
+                            "find_file": pre_deploy_check_result.stdout,
+                        })
+                    else:
+                        deploy_check_info = json.dumps({
+                            "type": "pre_deploy_check",
+                            "success": False,
+                            "find_file": pre_deploy_check_result.stdout,
+                        })
+                    yield f"data: {deploy_check_info}\n\n"
+
+
+
+
 
         async def _run_custom_cmd():
             cmd_data = parse_command_result.data
