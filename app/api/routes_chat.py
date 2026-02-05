@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+from datetime import datetime, timezone
 import json
 import mimetypes
 import os
@@ -11,6 +12,7 @@ import secrets
 import shlex
 import string
 import time
+import traceback
 import uuid
 from pathlib import Path
 from typing import Any, Optional, List, Literal, Union, Tuple
@@ -26,16 +28,17 @@ from app.core.ai302.deploy_ops import create_302ai_deploy_task, get_302ai_deploy
 from app.core.command_parser import parse_command_from_message, CommandType
 from app.core.command_runner import CommandRunner
 from app.core.config import ROOT_SAVE_PATH, settings
-from app.core.file_content import create_zip_from_directory
+from app.core.file_content import create_zip_from_directory, read_file_as_text_async
 from app.core.file_io import download_file_from_url, write_file_async
 from app.core.http_client import fetch_json_with_retry
-from app.core.log import log_error, log_info
+from app.core.log import log_error, log_info, log_warning
 from app.db.session import get_db, run_in_threadpool
 from app.repositories.session_repo import SessionRepository
 
 
 from pydantic import BaseModel, Field
 
+from app.utils.utils import get_uuid
 from claude_md import claude_md_str
 
 router = APIRouter()
@@ -182,6 +185,9 @@ class Message(BaseModel):
     role: Literal["user", "assistant", "system", "tool"] = Field(..., description="消息角色")
     content: Union[str, List[Union[TextContent, ImageContent]]] = Field(..., description="消息内容")
 
+    class Config:
+        extra = "allow"
+
 
 class ClaudeChatCompletionRequest(BaseModel):
     model: str = Field(..., description="模型名称")
@@ -238,22 +244,7 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
 
             yield sse_message("session_id", {"session_id": session_id, "workspace_path": workspace_path})
 
-            # 保存附件文件
-            file_paths = await _save_attachments(files, workspace_path)
-            # 判断是否是plan模式
-            is_plan = True if payload.action == "plan" else False
-            claude_code_cmd = await run_in_threadpool(
-                lambda: _build_claude_command(
-                    user_prompt + " " + ",".join(file_paths) + " ,当前的工作目录是：" + workspace_path, cc_session_id,
-                    system_prompt, is_plan_mode=is_plan)
-            )
-
-            log_info(claude_code_cmd)
-            # 判断是否传max_thinking_token
-            max_thinking_token = 0
-            if hasattr(payload, "max_thinking_token") and isinstance(payload.max_thinking_token, int):
-                max_thinking_token = payload.max_thinking_token
-
+            # 处理模型信息
             # fix 旧逻辑model传在线沙盒id，如果model以302-sandbox-开头，直接先使用环境默认变量里的模型
             # 现在线上版本的逻辑是四个模型参数全用同一个模型  这里也保持一致
             haiku_model = settings.ANTHROPIC_DEFAULT_HAIKU_MODEL if payload.model.startswith(
@@ -269,7 +260,6 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                 "302-sandbox-") else payload.model
 
             envs = {
-                "MAX_THINKING_TOKENS": str(max_thinking_token),
                 "BASH_DEFAULT_TIMEOUT_MS": "600000",
                 "BASH_MAX_TIMEOUT_MS": "1200000",
                 "ANTHROPIC_DEFAULT_OPUS_MODEL": opus_model,
@@ -277,6 +267,56 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                 "ANTHROPIC_DEFAULT_HAIKU_MODEL": haiku_model,
                 "CLAUDE_CODE_SUBAGENT_MODEL": subagent_model
             }
+
+            # 保存附件文件
+            file_paths = await _save_attachments(files, workspace_path)
+
+            # 判断是否强制把skill.md塞入上下文 前端将skill md作为tool类型messag发送 tool_call_id以forced-skill开头
+            forced_skill_tool = [x for x in payload.messages if x.role == "tool" and hasattr(x, "tool_call_id") and x.tool_call_id.startswith("forced-skill")]
+            if forced_skill_tool:
+                cc_history_project_path = f"/home/user/.claude/projects/{workspace_path.replace('/', '-')}"
+                # 首次对话缺少上下文历史jsonl文件 CC的CLI不支持/init 手动伪造JSONL会导致CC会报错 直接先进行一次简单的对话作为项目的初始化
+                if not cc_session_id:
+                    actively_set_session_id = get_uuid()
+                    init_input = "初始化项目，请直接回答你好并就结束任务（本次对话不使用任何MCP和skill和tool，但这个要求不要带到接下来的其他对话上）"
+                    init_session_resp = await runner.exec_json(f"echo '{init_input}' | claude -p --dangerously-skip-permissions true --session-id {actively_set_session_id} ",
+                                                               cwd=workspace_path,
+                                                               timeout=300,
+                                                               env=envs)
+                    if init_session_resp.exit_code != 0:
+                        yield  f"data: Init Failed: {init_session_resp.stderr}\n\n"
+                        return
+                    cc_session_id = actively_set_session_id
+                cc_history_project_jsonl = f'{cc_history_project_path}/{cc_session_id}.jsonl'
+
+                qa_list = []
+                for message in forced_skill_tool:
+                    qa_list.append((f"{MANUAL_INSERT_PREFIX} ", message.content))
+                if qa_list:
+                    cc_history_project_jsonl_content = await read_file_as_text_async(Path(cc_history_project_jsonl))
+                    result = await run_in_threadpool(
+                        lambda: _generate_qa_batch_content(cc_history_project_jsonl_content, qa_list)
+                    )
+                    if result:
+                        await write_file_async(Path(cc_history_project_jsonl), result["full_content"])
+                        log_info(f"成功生成 {result['count']} 组问答，移除了 {result['removed_count']} 条旧记录")
+                    else:
+                        log_warning("追加失败")
+            # 判断是否是plan模式
+            is_plan = True if payload.action == "plan" else False
+            claude_code_cmd = await run_in_threadpool(
+                lambda: _build_claude_command(
+                    user_prompt + " " + ",".join(file_paths) + " ,当前的工作目录是：" + workspace_path, cc_session_id,
+                    system_prompt, is_plan_mode=is_plan)
+            )
+
+            log_info(claude_code_cmd)
+            # 判断是否传max_thinking_token
+            max_thinking_token = 0
+            if hasattr(payload, "max_thinking_token") and isinstance(payload.max_thinking_token, int):
+                max_thinking_token = payload.max_thinking_token
+            envs["MAX_THINKING_TOKENS"] = str(max_thinking_token)
+
             is_save_session = False
             run_id: Optional[str] = None
             try:
@@ -522,6 +562,7 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                     yield chunk
         else:
             async for chunk in _run_claude_code_cmd():
+                await asyncio.sleep(0)
                 yield chunk
 
     return StreamingResponse(
@@ -819,4 +860,283 @@ async def _save_attachments(files, workspace_path):
 
     return saved
 
+# 用于识别手动插入数据的固定前缀
+MANUAL_INSERT_PREFIX = "阅读这个skill相关信息， 并只回复我已经阅读完毕"
 
+
+def _split_concatenated_json_objects(s: str) -> list[Any]:
+    """
+    从一段文本中顺序解析出多个 JSON 对象。
+    不依赖换行；即使 JSON 字符串值里包含真实换行也能工作。
+    """
+    dec = json.JSONDecoder()
+    i = 0
+    n = len(s)
+    out = []
+
+    while True:
+        while i < n and s[i].isspace():
+            i += 1
+        if i >= n:
+            break
+
+        obj, j = dec.raw_decode(s, i)
+        out.append(obj)
+        i = j
+
+    return out
+
+
+def _is_manual_inserted_record(record: dict) -> bool:
+    """
+    判断记录是否为手动插入的数据
+
+    Args:
+        record: JSONL记录
+
+    Returns:
+        True 如果是手动插入的记录
+    """
+    if record.get("type") != "user":
+        return False
+
+    message = record.get("message", {})
+    if message.get("role") != "user":
+        return False
+
+    content = message.get("content", "")
+
+    # 检查是否以固定前缀开头
+    if content.startswith(MANUAL_INSERT_PREFIX):
+        return True
+
+    # 检查是否是配对的"我已经阅读完毕"回复
+    if content == "我已经阅读完毕":
+        return True
+
+    return False
+
+
+def _remove_manual_inserted_records(records: list[dict]) -> tuple[list[dict], int]:
+    """
+    移除手动插入的记录，并修复 parentUuid 链
+
+    Args:
+        records: 原始记录列表
+
+    Returns:
+        (清理后的记录列表, 移除的记录数量)
+    """
+    if not records:
+        return records, 0
+
+    # 构建 uuid -> record 的映射
+    uuid_to_record = {r.get("uuid"): r for r in records if r.get("uuid")}
+
+    # 标记需要移除的记录
+    removed_uuids = set()
+
+    # 标记所有手动插入的记录
+    for record in records:
+        if _is_manual_inserted_record(record):
+            removed_uuids.add(record.get("uuid"))
+
+    if not removed_uuids:
+        return records, 0
+
+    # 找到每个被删除节点的有效父节点
+    def find_valid_parent(uuid_val: str) -> Optional[str]:
+        """向上查找第一个未被删除的父节点"""
+        current = uuid_val
+        visited = set()
+        while current and current not in visited:
+            visited.add(current)
+            if current not in removed_uuids:
+                return current
+            record = uuid_to_record.get(current)
+            if record:
+                current = record.get("parentUuid")
+            else:
+                break
+        return None
+
+    # 过滤并修复记录
+    cleaned_records = []
+    for record in records:
+        record_uuid = record.get("uuid")
+
+        # 跳过被标记删除的记录
+        if record_uuid in removed_uuids:
+            continue
+
+        # 检查是否需要修复 parentUuid
+        parent_uuid = record.get("parentUuid")
+        if parent_uuid and parent_uuid in removed_uuids:
+            valid_parent = find_valid_parent(parent_uuid)
+            if valid_parent:
+                record = record.copy()
+                record["parentUuid"] = valid_parent
+
+        cleaned_records.append(record)
+
+    return cleaned_records, len(removed_uuids)
+
+
+def _records_to_jsonl(records: list[dict]) -> str:
+    """
+    将记录列表转换为 JSONL 字符串
+    """
+    lines = [json.dumps(record, ensure_ascii=False) for record in records]
+    return '\n'.join(lines) + '\n' if lines else ''
+
+
+def _generate_qa_batch_content(
+        file_content: str,
+        qa_list: list[tuple[str, str]],
+        auto_clean: bool = True
+) -> Optional[dict]:
+    """
+    根据现有JSONL内容和问答列表，生成需要追加的内容
+
+    会自动检测并移除之前手动插入的数据（以固定前缀开头的记录）
+
+    Args:
+        file_content: 现有JSONL文件的内容字符串
+        qa_list: 问答对列表，每个元素为 (question, answer) 元组
+        auto_clean: 是否自动清理之前手动插入的数据，默认True
+
+    Returns:
+        包含以下字段的字典:
+        - append_content: 需要追加到文件的内容字符串
+        - count: 问答对数量
+        - records: 生成的所有记录
+        - first_user_uuid: 第一条用户记录的UUID
+        - last_assistant_uuid: 最后一条助手记录的UUID
+        - full_content: 完整的文件内容（始终有值，可直接用于重写文件）
+        - cleaned_content: 清理后的完整文件内容（需要重写时使用，否则为None）
+        - removed_count: 移除的旧记录数量
+        - needs_rewrite: 是否需要重写整个文件（而非追加）
+        如果解析失败则返回None
+    """
+    if not qa_list:
+        return None
+
+    # 解析文件内容
+    try:
+        records = _split_concatenated_json_objects(file_content)
+    except json.JSONDecodeError:
+        traceback.print_exc()
+        return None
+
+    if not records:
+        return None
+
+    # 清理手动插入的数据
+    removed_count = 0
+    needs_rewrite = False
+
+    if auto_clean:
+        records, removed_count = _remove_manual_inserted_records(records)
+        needs_rewrite = removed_count > 0
+        if removed_count > 0:
+            print(f"已移除 {removed_count} 条手动插入的记录")
+
+    # 从后往前查找所需字段
+    parent_uuid = None
+    session_id = None
+    cwd = None
+    version = None
+    git_branch = None
+    user_type = None
+
+    for record in reversed(records):
+        if not parent_uuid and record.get('uuid'):
+            parent_uuid = record['uuid']
+        if not session_id and record.get('sessionId'):
+            session_id = record['sessionId']
+        if not cwd and record.get('cwd'):
+            cwd = record['cwd']
+        if not version and record.get('version'):
+            version = record['version']
+        if git_branch is None and 'gitBranch' in record:
+            git_branch = record['gitBranch']
+        if not user_type and record.get('userType'):
+            user_type = record['userType']
+        if all([parent_uuid, session_id, cwd, version, git_branch is not None, user_type]):
+            break
+
+    if not all([parent_uuid, session_id, cwd, version, user_type]):
+        return None
+
+    # 生成所有记录
+    all_records = []
+    current_parent_uuid = parent_uuid
+
+    for question, answer in qa_list:
+        user_uuid = str(uuid.uuid4())
+        user_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+        user_record = {
+            "parentUuid": current_parent_uuid,
+            "isSidechain": False,
+            "userType": user_type,
+            "cwd": cwd,
+            "sessionId": session_id,
+            "version": version,
+            "gitBranch": git_branch or "",
+            "type": "user",
+            "message": {"role": "user", "content": question + answer},
+            "uuid": user_uuid,
+            "timestamp": user_time
+        }
+
+        assistant_uuid = str(uuid.uuid4())
+        assistant_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+        assistant_record = {
+            "parentUuid": user_uuid,
+            "isSidechain": False,
+            "userType": user_type,
+            "cwd": cwd,
+            "sessionId": session_id,
+            "version": version,
+            "gitBranch": git_branch or "",
+            "type": "user",
+            "message": {"role": "user", "content": "我已经阅读完毕"},
+            "uuid": assistant_uuid,
+            "timestamp": assistant_time
+        }
+
+        all_records.append({"user": user_record, "assistant": assistant_record})
+        current_parent_uuid = assistant_uuid
+
+    # 生成追加内容字符串
+    new_lines = []
+    for record in all_records:
+        new_lines.append(json.dumps(record["user"], ensure_ascii=False))
+        new_lines.append(json.dumps(record["assistant"], ensure_ascii=False))
+    append_content = '\n'.join(new_lines) + '\n'
+
+    # 生成完整内容
+    if needs_rewrite:
+        # 清理后的记录 + 新内容
+        base_content = _records_to_jsonl(records)
+        full_content = base_content + append_content
+        cleaned_content = full_content
+    else:
+        # 原内容 + 新内容
+        base_content = file_content.rstrip('\n') + '\n' if file_content.strip() else ''
+        full_content = base_content + append_content
+        cleaned_content = None
+
+    return {
+        "append_content": append_content,
+        "count": len(qa_list),
+        "records": all_records,
+        "first_user_uuid": all_records[0]["user"]["uuid"],
+        "last_assistant_uuid": all_records[-1]["assistant"]["uuid"],
+        "full_content": full_content,
+        "cleaned_content": cleaned_content,
+        "removed_count": removed_count,
+        "needs_rewrite": needs_rewrite
+    }
