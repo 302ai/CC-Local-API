@@ -448,7 +448,7 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                     yield f"Failed to deploy: {deploy_result.stderr}"
                     return
                 resp = {"success": True, "status": "success", "id": "", "url": deploy_result.stdout, "cover": ""}
-                yield f"data: **deploy sandbox successfully**\ndata: {resp}\n \n\n"
+                yield f"data: **deploy sandbox successfully**\n{resp}\n \n\n"
             else:
                 AI302_API_KEY = os.environ.get("AI302_API_KEY", "")
                 if not AI302_API_KEY:
@@ -473,7 +473,7 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                         if deploy_result["success"]:
                             if deploy_result["status"] == "success":
                                 resp = {"success": True, "status": "success", "id": deploy_project_id, "url": deploy_result["url"], "cover": ""}
-                                yield f"data: **deploy sandbox successfully**\ndata: {resp}\n \n\n"
+                                yield f"data: **deploy sandbox successfully**\n{resp}\n \n\n"
                                 return
                         else:
                             yield f"event: error\ndata: **deploy sandbox failed**\n{deploy_result['error']}\n \n\n"
