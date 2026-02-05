@@ -514,14 +514,11 @@ async def _handle_file_stream_download(file_path: Path, original_path: str, is_d
                 except Exception:
                     pass
 
-    # 处理文件名编码（支持中文等非 ASCII 字符）
-    encoded_filename = quote(filename)
-
     return StreamingResponse(
         file_iterator(),
         media_type=media_type,
         headers={
-            "Content-Disposition": f"attachment; filename=\"{filename.encode('utf-8').decode('latin-1', 'ignore')}\""
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}; filename=\"{filename.encode('utf-8').decode('latin-1', 'ignore')}\""
         }
     )
 
