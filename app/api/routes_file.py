@@ -521,7 +521,7 @@ async def _handle_file_stream_download(file_path: Path, original_path: str, is_d
         file_iterator(),
         media_type=media_type,
         headers={
-            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}; filename=\"{filename}\""
+            "Content-Disposition": f"attachment; filename=\"{filename.encode('utf-8').decode('latin-1', 'ignore')}\""
         }
     )
 
