@@ -34,10 +34,12 @@ async def execute_command(payload: CommandRequest):
     )
     return ok(
         {
-            "exit_code": result.exit_code,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "error": result.error,
+            "result": {
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "error": result.error,
+                "exit_code": result.exit_code,
+            }
         }
     )
 
