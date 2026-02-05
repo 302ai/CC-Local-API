@@ -47,6 +47,20 @@ class CommandRunner:
 
         return data.decode("utf-8", errors="replace")
 
+    def _looks_like_warning(self, text: str) -> bool:
+        # Heuristic classification for runtime warnings emitted by tools/CLI.
+        # Keep it conservative to avoid misclassifying normal model output.
+        t = text.strip()
+        if not t:
+            return False
+        if t.startswith("⚠️") or t.startswith("WARNING") or t.startswith("Warning"):
+            return True
+        if "[BashTool] Pre-flight check" in t:
+            return True
+        if "Pre-flight check is taking longer than expected" in t:
+            return True
+        return False
+
     def build_env(self, env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         full_env = {**os.environ, **(env or {})}
         full_env["PYTHONIOENCODING"] = "utf-8"
@@ -174,7 +188,8 @@ class CommandRunner:
                                 if part:
                                     line_count += 1
                                     last_output_time = asyncio.get_event_loop().time()
-                                    yield {"event": "output", "run_id": run_id, "text": part}
+                                    ev_type = "warning" if self._looks_like_warning(part) else "output"
+                                    yield {"event": ev_type, "run_id": run_id, "text": part}
                         continue
                     except asyncio.TimeoutError:
                         if proc.returncode is not None:
@@ -203,7 +218,8 @@ class CommandRunner:
                                 if part:
                                     line_count += 1
                                     last_output_time = asyncio.get_event_loop().time()
-                                    yield {"event": "output", "run_id": run_id, "text": part}
+                                    ev_type = "warning" if self._looks_like_warning(part) else "output"
+                                    yield {"event": ev_type, "run_id": run_id, "text": part}
                             continue
 
                     if proc.returncode is not None:
@@ -217,7 +233,8 @@ class CommandRunner:
                 if text:
                     line_count += 1
                     last_output_time = asyncio.get_event_loop().time()
-                    yield {"event": "output", "run_id": run_id, "text": text}
+                    ev_type = "warning" if self._looks_like_warning(text) else "output"
+                    yield {"event": ev_type, "run_id": run_id, "text": text}
 
             if proc.returncode is None:
                 try:
