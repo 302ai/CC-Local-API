@@ -369,7 +369,6 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
             command = cmd_data.command
             work_path = cmd_data.cwd
             envs = cmd_data.envs or {}
-            user = cmd_data.user or "user"
 
             run_id: Optional[str] = None
             try:
@@ -484,6 +483,20 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                     yield f"event: error\ndata: **deploy sandbox failed**{e} \n\n"
                     return
 
+        async def _run_plugin_cmd():
+            plugin_cmd = f"claude plugin {parse_command_result.data.plugin_args}"
+            log_info(f"plugin_cmd: {plugin_cmd}")
+            plugin_cmd_resp = await runner.exec_json(plugin_cmd)
+            if plugin_cmd_resp.exit_code == 0:
+                log_info(plugin_cmd_resp.stdout)
+                yield "data: **Plugin successfully**\n\n"
+                yield f"data: {plugin_cmd_resp.stdout}\n\n"
+            else:
+                log_error(plugin_cmd_resp.stderr)
+                yield "data: **Plugin failed**\n\n"
+                yield f"data: {plugin_cmd_resp.stderr}\n\n"
+
+
         # 处理messages
         system_prompt, user_prompt, last_user_prompt, files = await run_in_threadpool(
             lambda: _extract_prompts(payload.messages)
@@ -496,12 +509,16 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
         log_info(f"parse_command_result: {parse_command_result}")
         # 用户输入了预设的斜杠命令
         if parse_command_result:
-            if parse_command_result.command_type == CommandType.COMMAND:
-                async for chunk in _run_custom_cmd():
-                    yield chunk
-            elif parse_command_result.command_type == CommandType.DEPLOY:
-                async for chunk in _run_deploy_cmd():
-                    log_info(chunk)
+            command_handlers = {
+                CommandType.COMMAND: _run_custom_cmd,
+                CommandType.DEPLOY: _run_deploy_cmd,
+                CommandType.PLUGIN: _run_plugin_cmd,
+            }
+
+            handler = command_handlers.get(parse_command_result.command_type)
+            if handler:
+                async for chunk in handler():
+                    await asyncio.sleep(0)
                     yield chunk
         else:
             async for chunk in _run_claude_code_cmd():
