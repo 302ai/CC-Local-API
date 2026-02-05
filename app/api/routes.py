@@ -25,7 +25,7 @@ cc_router = APIRouter(prefix=CC_PREFIX, tags=["Base"])
 chat_base_router = APIRouter(prefix=CHAT_PREFIX, tags=["Chat"])
 
 sandbox_router.include_router(common_router)
-sandbox_router.include_router(command_router)
+cc_router.include_router(command_router)
 sandbox_router.include_router(file_router)
 chat_base_router.include_router(chat_router)
 sandbox_router.include_router(session_router)
