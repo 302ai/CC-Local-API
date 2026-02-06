@@ -214,6 +214,8 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
     if not payload.messages or len(payload.messages) == 0:
         return fail("messages is empty")
 
+    log_info(json.dumps(payload, ensure_ascii=False))
+
     runner = CommandRunner()
 
     async def gen():
@@ -538,7 +540,6 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                 log_error(plugin_cmd_resp.stderr)
                 yield "data: **Plugin failed**\n\n"
                 yield f"data: {plugin_cmd_resp.stderr}\n\n"
-
 
         # 处理messages
         system_prompt, user_prompt, last_user_prompt, files = await run_in_threadpool(
