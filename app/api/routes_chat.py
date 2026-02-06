@@ -214,8 +214,6 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
     if not payload.messages or len(payload.messages) == 0:
         return fail("messages is empty")
 
-    log_info(json.dumps(payload, ensure_ascii=False))
-
     runner = CommandRunner()
 
     async def gen():
@@ -911,7 +909,7 @@ def _is_manual_inserted_record(record: dict) -> bool:
     content = message.get("content", "")
 
     # 检查是否以固定前缀开头
-    if content.startswith(MANUAL_INSERT_PREFIX):
+    if isinstance(content, str) and content.startswith(MANUAL_INSERT_PREFIX):
         return True
 
     # 检查是否是配对的"我已经阅读完毕"回复
