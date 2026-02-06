@@ -244,7 +244,6 @@ async def do_deploy(payload: SandboxDeployRequest, repo: SessionRepository = Dep
         return fail(str(e))
 
 
-
 @router.get("/session")
 async def get_session(limit: int = Query(50, description="每页数量"),
                       offset: int = Query(0, description="偏移量"),
@@ -337,6 +336,14 @@ async def mock_list_sandbox(repo: SessionRepository = Depends(get_session_repo))
             }
         ]
     })
+
+
+@router.post("/reset", description="mock接口 本地接口这个api没有实际意义")
+async def mock_reset_sandbox():
+    return ok({"data": {
+        "sandbox_id": "302-sandbox-xxxxxxx"
+    }})
+
 
 def _secure_rand_str(n=10):
     alphabet = string.ascii_lowercase + string.digits  # a-z + 0-9
