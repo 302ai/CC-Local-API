@@ -306,7 +306,8 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
             is_plan = True if payload.action == "plan" else False
             claude_code_cmd = await run_in_threadpool(
                 lambda: _build_claude_command(
-                    user_prompt + " " + ",".join(file_paths) + " ,当前的工作目录是：" + workspace_path, cc_session_id,
+                    user_prompt + " " + ",".join(file_paths) + " ,当前的工作目录是：" + workspace_path + f" ,使用的所有文件存放目录是： {workspace_path}/.302ai/attachments",
+                    cc_session_id,
                     system_prompt, is_plan_mode=is_plan)
             )
 
@@ -346,6 +347,8 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                             "timestamp": time.time()
                         })
                         yield f"data: {heartbeat}\n\n"
+                    elif event == "warning":
+                        log_warning(ev["text"])
                     elif event == "output":
 
                         def bind_op(sid, true_sid):
