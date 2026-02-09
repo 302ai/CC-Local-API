@@ -237,11 +237,11 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                         workspace_path=workspace_path,
                     )
                     cc_session_id = ""
-                    await write_file_async(Path(f"{workspace_path}/CLAUDE.md"), claude_md_str)
+
                 else:
                     workspace_path = session.workspace_path
                     cc_session_id = session.session_id
-
+            await write_file_async(Path(f"{workspace_path}/CLAUDE.md"), claude_md_str)
             yield sse_message("session_id", {"session_id": session_id, "workspace_path": workspace_path})
 
             # 处理模型信息
@@ -531,7 +531,7 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                     for i in range(30):
                         await asyncio.sleep(10)
 
-                        # 发送进度心跳
+                        # 发送轮询进度心跳
                         progress = json.dumps({
                             "type": "deploy_progress",
                             "attempt": i + 1,
