@@ -456,45 +456,55 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
             )
             # 没传入 生成默认的session_id
             if not session_id:
-                yield f"event: error\ndata: Missing session_id \n\n"
+                yield f"event: error\ndata: Missing session_id\n\n"
                 return
             session = repo.get_session_by_alias(session_id)
             if session is None:
-               yield f"event: error\ndata: Not found session_id: {session_id} \n\n"
-               return
+                yield f"event: error\ndata: Not found session_id: {session_id}\n\n"
+                return
             workspace_path = session.workspace_path
-            # yield "data: wait for pre deployment preparation ...\n \n\n"
+
             if parse_command_result.data.envs:
                 env_content = "\n".join(
                     f"{key}={value}"
                     for key, value in parse_command_result.data.envs.items()
                 )
                 await write_file_async(Path(f"{workspace_path}/.env"), env_content)
-            # yield "data: start deploy ...\n \n\n"
+
             # 用户使用自己的vercel key
             if parse_command_result.data.vercel_key:
-                project_name =parse_command_result.data.project_name or _secure_rand_str()
+                project_name = parse_command_result.data.project_name or _secure_rand_str()
 
                 vercel_line_result = await runner.exec_json(
                     command=f"vercel link --project {project_name} --token={parse_command_result.data.vercel_key} --yes",
                     cwd=workspace_path
                 )
                 if vercel_line_result.exit_code != 0:
-                    yield f"event: error\ndata: Failed to deploy: {vercel_line_result.stderr}\n \n\n"
+                    yield f"event: error\ndata: Failed to deploy: {vercel_line_result.stderr}\n\n"
                     return
+
                 deploy_result = await runner.exec_json(
                     command=f"vercel --prod --token={parse_command_result.data.vercel_key} --yes",
                     cwd=workspace_path
                 )
                 if deploy_result.exit_code != 0:
-                    yield f"Failed to deploy: {deploy_result.stderr}"
+                    yield f"event: error\ndata: Failed to deploy: {deploy_result.stderr}\n\n"
                     return
-                resp = {"success": True, "status": "success", "id": "", "url": deploy_result.stdout, "cover": ""}
-                yield f"data: **deploy sandbox successfully**\n{resp}\n \n\n"
+
+                resp = json.dumps({
+                    "type": "deploy_success",
+                    "success": True,
+                    "status": "success",
+                    "id": "",
+                    "url": deploy_result.stdout,
+                    "cover": ""
+                })
+                yield f"data: {resp}\n\n"
+
             else:
                 AI302_API_KEY = os.environ.get("AI302_API_KEY", "")
                 if not AI302_API_KEY:
-                    yield f"event: error\ndata: Missing AI302_API_KEY \n\n"
+                    yield f"event: error\ndata: Missing AI302_API_KEY\n\n"
                     return
 
                 zip_path = await run_in_threadpool(
@@ -502,28 +512,55 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                 )
 
                 if zip_path.stat().st_size > 20 * 1024 * 1024:
-                    yield f"event: error\ndata: The file data is too large and exceeds the size limit of the 302.ai deployment interface\n \n\n"
+                    yield f"event: error\ndata: The file data is too large and exceeds the size limit of the 302.ai deployment interface\n\n"
                     return
 
                 try:
                     headers = {'Authorization': f"Bearer {AI302_API_KEY}"}
                     create_deploy_task_resp = await create_302ai_deploy_task(zip_path, headers=headers)
                     deploy_project_id = create_deploy_task_resp["id"]
-                    for _ in range(30):
+
+                    # 发送部署任务创建成功的消息
+                    task_created = json.dumps({
+                        "type": "deploy_task_created",
+                        "id": deploy_project_id,
+                        "message": "Deploy task created, waiting for completion..."
+                    })
+                    yield f"data: {task_created}\n\n"
+
+                    for i in range(30):
                         await asyncio.sleep(10)
+
+                        # 发送进度心跳
+                        progress = json.dumps({
+                            "type": "deploy_progress",
+                            "attempt": i + 1,
+                            "max_attempts": 30,
+                            "timestamp": time.time()
+                        })
+                        yield f"data: {progress}\n\n"
+
                         deploy_result = await get_302ai_deploy_task_info(deploy_project_id, headers=headers)
                         if deploy_result["success"]:
                             if deploy_result["status"] == "success":
-                                resp = {"success": True, "status": "success", "id": deploy_project_id, "url": deploy_result["url"], "cover": ""}
-                                yield f"data: **deploy sandbox successfully**\n{resp}\n \n\n"
+                                resp = json.dumps({
+                                    "type": "deploy_success",
+                                    "success": True,
+                                    "status": "success",
+                                    "id": deploy_project_id,
+                                    "url": deploy_result["url"],
+                                    "cover": ""
+                                })
+                                yield f"data: {resp}\n\n"
                                 return
                         else:
-                            yield f"event: error\ndata: **deploy sandbox failed**\n{deploy_result['error']}\n \n\n"
+                            yield f"event: error\ndata: Deploy sandbox failed: {deploy_result['error']}\n\n"
                             return
-                    yield f"event: error\ndata: **deploy sandbox failed**Wait for a timeout\n \n\n"
+
+                    yield f"event: error\ndata: Deploy sandbox failed: Wait for a timeout\n\n"
                     return
                 except Exception as e:
-                    yield f"event: error\ndata: **deploy sandbox failed**{e} \n\n"
+                    yield f"event: error\ndata: Deploy sandbox failed: {e}\n\n"
                     return
 
         async def _run_plugin_cmd():
