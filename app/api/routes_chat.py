@@ -304,9 +304,20 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                         log_warning("追加失败")
             # 判断是否是plan模式
             is_plan = True if payload.action == "plan" else False
+            final_user_prompt = user_prompt + " " + ",".join(file_paths) + " ,当前的工作目录是：" + workspace_path + f" ,使用的所有文件存放目录是： {workspace_path}/.302ai/attachments"
+            if payload.available_skills:
+                skill_prompt_prefix = "**Note**:  忽略之前提及的skills存储位置， 你使用的skills以接下来我告诉你的路径为准"
+                for skill in payload.available_skills:
+                    find_skill_path = await run_in_threadpool(
+                        lambda: _find_folder_upto_depth2("/home/user/.claude/skills", skill)
+                    )
+                    if find_skill_path:
+                        final_user_prompt += f"\n {skill_prompt_prefix}{skill} skill数据存放在： {','.join(find_skill_path)}"
+                        skill_prompt_prefix = ""
+            log_info(final_user_prompt)
             claude_code_cmd = await run_in_threadpool(
                 lambda: _build_claude_command(
-                    user_prompt + " " + ",".join(file_paths) + " ,当前的工作目录是：" + workspace_path + f" ,使用的所有文件存放目录是： {workspace_path}/.302ai/attachments",
+                    final_user_prompt,
                     cc_session_id,
                     system_prompt, is_plan_mode=is_plan)
             )
@@ -342,11 +353,12 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                             {"run_id": ev["run_id"], "pid": ev["pid"], "command": ev["command"]},
                         )
                     elif event == "heartbeat":
-                        heartbeat = json.dumps({
-                            "type": "heartbeat",
-                            "timestamp": time.time()
-                        })
-                        yield f"data: {heartbeat}\n\n"
+                        if payload.structured_output:
+                            heartbeat = json.dumps({
+                                "type": "heartbeat",
+                                "timestamp": time.time()
+                            })
+                            yield f"data: {heartbeat}\n\n"
                     elif event == "warning":
                         log_warning(ev["text"])
                     elif event == "output":
@@ -1027,6 +1039,39 @@ def _records_to_jsonl(records: list[dict]) -> str:
     """
     lines = [json.dumps(record, ensure_ascii=False) for record in records]
     return '\n'.join(lines) + '\n' if lines else ''
+
+
+def _find_folder_upto_depth2(root_dir: Union[str, Path], target_name: str) -> List[str]:
+    """
+    在 root_dir 下查找名为 target_name 的文件夹，深度 <= 2：
+      - 深度0：root_dir 本身
+      - 深度1：root_dir 的直接子目录
+      - 深度2：root_dir 的子子目录
+    返回所有命中的完整路径（字符串）。
+    """
+    root = Path(root_dir)
+    results: List[str] = []
+
+    if not root.is_dir():
+        return results
+
+    # 深度0
+    if root.name == target_name:
+        results.append(str(root.resolve()))
+
+    # 深度1、2
+    for d1 in root.iterdir():
+        if not d1.is_dir():
+            continue
+
+        if d1.name == target_name:
+            results.append(str(d1.resolve()))
+
+        for d2 in d1.iterdir():
+            if d2.is_dir() and d2.name == target_name:
+                results.append(str(d2.resolve()))
+
+    return results
 
 
 def _generate_qa_batch_content(
