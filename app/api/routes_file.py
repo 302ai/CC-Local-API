@@ -386,7 +386,7 @@ async def operate_file(payload: FileCommonOperationRequest):
                 )
             elif src.is_file():
                 await run_in_threadpool(
-                    lambda: shutil.copy2(payload.original_path, payload.target_path)
+                    lambda: shutil.copy(payload.original_path, payload.target_path)
                 )
         elif payload.operation == "move":
             await run_in_threadpool(

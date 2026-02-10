@@ -62,4 +62,4 @@ def sync_copy_dir_contents(src_dir, dst_dir, *, clear_dst=False):
             # 若 clear_dst=False 且 target 已存在会报错；需要覆盖可改成 dirs_exist_ok=True
             shutil.copytree(p, target)
         else:
-            shutil.copy2(p, target)
+            shutil.copy(p, target)
