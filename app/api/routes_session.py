@@ -278,10 +278,10 @@ async def update_session(payload: SessionUpdateRequest, repo: SessionRepository 
 
 
 @router.delete("/session")
-async def delete_session(payload: SessionDeleteRequest, repo: SessionRepository = Depends(get_session_repo)):
+async def delete_session(session_id: str = Query(description="对话id"), repo: SessionRepository = Depends(get_session_repo)):
     def op():
         with repo.atomic():
-            session = repo.get_session_by_alias(payload.session_id)
+            session = repo.get_session_by_alias(session_id)
             if session is None:
                 return False, "session does not exist"
             repo.delete_session(session.id)
@@ -290,9 +290,13 @@ async def delete_session(payload: SessionDeleteRequest, repo: SessionRepository 
     is_success, msg = await run_in_threadpool(op)
     if not is_success:
         return fail(msg, status_code=404)
-    shutil.rmtree(msg, ignore_errors=True)
+    # shutil.rmtree(msg, ignore_errors=True)
 
-    return ok({"message": "session deleted"})
+    return ok({
+        "message": "Delete Sandbox Session OK",
+        "sandbox_id": "",
+        "session_id": session_id
+    })
 
 
 @router.post("/create")
