@@ -254,7 +254,15 @@ async def get_session(limit: int = Query(50, description="每页数量"),
 
     result = await run_in_threadpool(op)
 
-    items = [{"session_id": x.session_alias, "note": x.note, "workspace_path": x.workspace_path} for x in result.items]
+    items = [
+        {
+            "session_id": x.session_alias,
+            "note": x.note,
+            "workspace_path": x.workspace_path,
+            "used_at": x.last_used_at.isoformat() + "Z" if x.last_used_at else None
+        }
+        for x in result.items
+    ]
     total = result.total
 
     # total_pages = math.ceil(total / limit) if limit > 0 else 0
