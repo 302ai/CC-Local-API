@@ -304,7 +304,7 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                         log_warning("追加失败")
             # 判断是否是plan模式
             is_plan = True if payload.action == "plan" else False
-            final_user_prompt = user_prompt + " " + ",".join(file_paths) + " ,当前的工作目录是：" + workspace_path + f" ,使用的所有文件存放目录是： {workspace_path}/.302ai/attachments"
+            final_user_prompt = user_prompt + " " + ",".join(file_paths) + " ,当前的工作目录是：" + workspace_path + f" ,附件目录是： {workspace_path}/.302ai/attachments"
             if payload.available_skills:
                 skill_prompt_prefix = "**Note**:  忽略之前提及的skills存储位置， 你使用的skills以接下来我告诉你的路径为准"
                 for skill in payload.available_skills:
