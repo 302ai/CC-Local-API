@@ -259,7 +259,8 @@ async def get_session(limit: int = Query(50, description="每页数量"),
             "session_id": x.session_alias,
             "note": x.note,
             "workspace_path": x.workspace_path,
-            "used_at": x.last_used_at.isoformat() + "Z" if x.last_used_at else None
+            "used_at": x.last_used_at.isoformat() + "Z" if x.last_used_at else None,
+            "updated_at": x.updated_at.isoformat() + "Z" if x.updated_at else None,
         }
         for x in result.items
     ]
