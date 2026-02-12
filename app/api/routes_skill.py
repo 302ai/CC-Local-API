@@ -242,6 +242,7 @@ async def skill_list(
     return ok({
         "user_skills": [
             {
+                "id": skill.id,
                 "name": skill.name,
                 "description": skill.description_en,
                 "description_zh": skill.description_zh,
@@ -262,29 +263,29 @@ async def skill_list(
 @router.delete("/skills")
 async def skill_delete(payload: SkillDeleteRequest, repo: SkillRepository = Depends(get_skill_repo),):
     delete_result = []
-    for skill_id in payload.skill_id_list:
+    for skill_name in payload.skill_list:
         skill_path = None
         skill_zip_path = None
-        skill_name = ""
+        skill_id = ""
 
-        def op(sid=skill_id):
-            nonlocal skill_path, skill_zip_path, skill_name
-            skill_data = repo.get_skill(sid)
+        def op(sname=skill_name):
+            nonlocal skill_path, skill_zip_path, skill_id
+            skill_data = repo.get_skill_by_name(sname)
             if not skill_data:
                 return {
                     "success": False,
-                    "message": f"skill_id [{sid}] does not exist",
-                    "name": "",
-                    "id": sid,
+                    "message": f"skill_name [{sname}] does not exist",
+                    "name": sname,
+                    "id": "",
                 }
 
             # 保存路径信息供事务外使用
             skill_path = Path(skill_data.local_path)
             skill_zip_path = skill_path.with_suffix(".zip")
-            skill_name = skill_data.name  # 根据实际字段调整
+            skill_id = skill_data.id  # 根据实际字段调整
 
             # 只删数据库
-            repo.delete_skill(sid)
+            repo.delete_skill(skill_id)
             return None  # 表示数据库删除成功
 
         with repo.atomic():
