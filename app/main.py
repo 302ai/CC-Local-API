@@ -4,6 +4,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import asyncio
+import datetime
+import shutil
 
 import aiohttp
 from fastapi import FastAPI
@@ -15,7 +17,7 @@ from app.core.config import settings
 from app.core.git_ops import validate_and_normalize_github_url
 from app.core.log import log_info
 from app.db.database import db_state_default
-from app.models.base import bind_models
+from app.models.base import bind_models, auto_migrate_add_missing_columns, detect_missing_columns
 from app.models.skill import Skill
 from app.models.session import Session
 
@@ -23,7 +25,28 @@ from app.models.session import Session
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.db = db_state_default()
+
     bind_models(app.state.db.database, [Skill, Session])
+
+    models = [Skill, Session]
+
+    # Detect whether migration is needed. If needed, backup first, then migrate.
+    missing_cols = detect_missing_columns(app.state.db.database, models)
+    if missing_cols:
+        db_path = Path(settings.DB_SQLITE_PATH)
+        if db_path.exists():
+            ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            backup_path = db_path.with_suffix(db_path.suffix + f".bak.{ts}")
+            backup_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(db_path, backup_path)
+            log_info(
+                "SQLite DB backup created before auto-migration.",
+                db_path=str(db_path),
+                backup_path=str(backup_path),
+                missing_columns=len(missing_cols),
+            )
+
+        auto_migrate_add_missing_columns(app.state.db.database, models)
 
     async def _load_official_skills_once():
         github_url = "https://github.com/anthropics/skills.git"
