@@ -10,7 +10,8 @@ async def create_302ai_deploy_task(
         zip_path: Path,
         session: aiohttp.ClientSession | None = None,
         headers: dict | None = None,
-        env: dict | None = None
+        env: dict | None = None,
+        update_subdomain: str | None = None,
 ):
     """上传 zip 文件，确保文件正确关闭"""
 
@@ -30,6 +31,9 @@ async def create_302ai_deploy_task(
                 value=json.dumps(env),
                 content_type='application/json'
             )
+
+        if update_subdomain:
+            form_data.add_field("update_subdomain", value=update_subdomain)
 
         response = await fetch_json_with_retry(
             'POST',

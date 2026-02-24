@@ -33,6 +33,7 @@ class SessionRepository:
             session_alias: str | None = None,
             note: str | None = None,
             workspace_path: str | None = None,
+            deploy_id: str | None = None,
     ) -> Session:
         """创建新会话"""
         self._ensure_tables()
@@ -44,6 +45,7 @@ class SessionRepository:
             session_alias=session_alias,
             note=note,
             workspace_path=workspace_path,
+            deploy_id=deploy_id,
             last_used_at=now,
             created_at=now,
             updated_at=now,
@@ -57,6 +59,7 @@ class SessionRepository:
             session_alias: str | None = ...,
             note: str | None = ...,
             workspace_path: str | None = ...,
+            deploy_id: str | None = ...,
     ) -> Optional[Session]:
         """更新会话信息"""
         self._ensure_tables()
@@ -73,6 +76,8 @@ class SessionRepository:
             session.note = note
         if workspace_path is not ...:
             session.workspace_path = workspace_path
+        if deploy_id is not ...:
+            session.deploy_id = deploy_id
 
         session.save()
         return session

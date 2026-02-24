@@ -529,9 +529,11 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
 
                 try:
                     headers = {'Authorization': f"Bearer {AI302_API_KEY}"}
-                    create_deploy_task_resp = await create_302ai_deploy_task(zip_path, headers=headers)
+                    create_deploy_task_resp = await create_302ai_deploy_task(zip_path, headers=headers, update_subdomain=session.deploy_id)
                     deploy_project_id = create_deploy_task_resp["id"]
-
+                    session = await run_in_threadpool(
+                        lambda: repo.update_session(session.id, deploy_id=deploy_project_id)
+                    )
                     # 发送部署任务创建成功的消息
                     task_created = json.dumps({
                         "type": "deploy_task_created",

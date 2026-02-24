@@ -14,6 +14,8 @@ class Session(BaseModel):
 
     workspace_path = TextField(null=True)  # 对应的工作区路径
 
+    deploy_id = CharField(max_length=64, null=True, index=True)  # 部署ID（初始可为空）
+
     last_used_at = DateTimeField(null=True, index=True)  # 最后使用时间
     created_at = DateTimeField(default=datetime.datetime.utcnow)
     updated_at = DateTimeField(default=datetime.datetime.utcnow)

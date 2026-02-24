@@ -226,9 +226,11 @@ async def do_deploy(payload: SandboxDeployRequest, repo: SessionRepository = Dep
         return fail("project zip file size is too large", status_code=400)
     try:
         headers = {'Authorization': f"Bearer {AI302_API_KEY}"}
-        create_deploy_task_resp = await create_302ai_deploy_task(zip_path, headers=headers, env=payload.envs)
+        create_deploy_task_resp = await create_302ai_deploy_task(zip_path, headers=headers, env=payload.envs, update_subdomain=session.deploy_id)
         deploy_project_id = create_deploy_task_resp["id"]
-
+        session = await run_in_threadpool(
+            lambda: repo.update_session(session.id, deploy_id=deploy_project_id)
+        )
         for _ in range(30):
             await asyncio.sleep(10)
             deploy_result = await get_302ai_deploy_task_info(deploy_project_id, headers=headers)
