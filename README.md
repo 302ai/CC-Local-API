@@ -61,7 +61,7 @@ Environment variables (see `app/core/config.py` and `docker-compose.yml`):
 
 | Variable | Description | Default |
 |---|---|---|
-| `APP_NAME` | FastAPI title | `fastapi-peewee-skeleton` |
+| `APP_NAME` | FastAPI title | `claude_code_sandbox_local_api` |
 | `DB_SQLITE_PATH` | SQLite DB path | `app.db` |
 | `ROOT_SAVE_PATH` | Root directory used for workspaces and storage | (env-dependent) |
 | `ANTHROPIC_BASE_URL` | Upstream API base | `https://api.302.ai` |
