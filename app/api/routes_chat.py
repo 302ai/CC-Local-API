@@ -22,16 +22,18 @@ import aiohttp
 from fastapi import APIRouter, Depends, Request, Query
 from starlette.responses import StreamingResponse
 
-from app.api.response import fail, ok
+from app.api.response import fail, ok, oc_fail_stream
 from app.api.routes_command import sse_message
+from app.api.routes_session import claw_lock
 from app.core.ai302.deploy_ops import create_302ai_deploy_task, get_302ai_deploy_task_info
 from app.core.command_parser import parse_command_from_message, CommandType
 from app.core.command_runner import CommandRunner
 from app.core.config import ROOT_SAVE_PATH, settings
 from app.core.file_content import create_zip_from_directory, read_file_as_text_async
 from app.core.file_io import download_file_from_url, write_file_async
-from app.core.http_client import fetch_json_with_retry
+from app.core.http_client import fetch_json_with_retry, fetch_sse_with_retry
 from app.core.log import log_error, log_info, log_warning
+from app.core.oc_ops import oc_new_session_and_list_active
 from app.db.session import get_db, run_in_threadpool
 from app.repositories.session_repo import SessionRepository
 
@@ -198,6 +200,7 @@ class ClaudeChatCompletionRequest(BaseModel):
     enable_pre_deploy_check: bool = Field(False, description="是否开启部署前检测 需要开启structured_output使用")
     available_skills: List[str] = Field([], description="对话选择开启的skills")
     action: str = Field("", description="特殊操作指令")
+    agent_type: int = Field(0, description="智能体类型， 0=claude code；1=openclaw")
 
     class Config:
         extra = "allow"
@@ -590,6 +593,117 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                 yield "data: **Plugin failed**\n\n"
                 yield f"data: {plugin_cmd_resp.stderr}\n\n"
 
+        async def _run_openclaw_cmd():
+            # 判断用户是否有传入session
+            session_id = await run_in_threadpool(
+                lambda: _get_field_value(payload, request, "session_id")
+            )
+            # 没传入 生成默认的session_id
+            if not session_id:
+                session_id = str(uuid.uuid4())
+
+            session = repo.get_session_by_alias(session_id)
+
+            if session is None:
+                async with claw_lock:
+                    workspace_path = f"{ROOT_SAVE_PATH}/workspace/{_secure_rand_str()}"
+                    workspace_name = Path(workspace_path).name
+                    create_agent_cmd = f"openclaw agents add --workspace '{workspace_path}' '{workspace_name}' --json"
+                    create_agent_result = await runner.exec_json(create_agent_cmd)
+                    if create_agent_result.exit_code != 0:
+                        raise Exception(create_agent_result.stderr)
+                    log_info(f"create agent {workspace_path} success\n{create_agent_result.stdout}")
+                    oc_agent_id = workspace_name
+                    new_resp, list_sessions_result = await oc_new_session_and_list_active(
+                        oc_agent_id=oc_agent_id,
+                        runner=runner,
+                        active=3,
+                    )
+                    log_info(f"{new_resp}")
+
+                    if list_sessions_result.exit_code != 0:
+                        raise Exception(list_sessions_result.stderr)
+
+                    data = json.loads(list_sessions_result.stdout)
+                    sessions = data.get("sessions", [])
+
+                    if not sessions:
+                        raise Exception("No active sessions found")
+
+                    # 按 updatedAt 降序排序，取最新的一个
+                    latest_session = max(sessions, key=lambda s: s.get("updatedAt", 0))
+                    log_info(f"{latest_session}")
+
+                session = await run_in_threadpool(lambda: repo.create_session(
+                    session_alias=payload.session_id,
+                    workspace_path=workspace_path,
+                    oc_agent_id=oc_agent_id,
+                    oc_session_id=latest_session.get("sessionId"),
+                    oc_session_key=latest_session.get("key"),
+                ))
+                oc_session_key = latest_session.get("key")
+            else:
+                if not session.oc_session_key:
+                    workspace_path = session.workspace_path
+                    oc_agent_id = repo.get_oc_agent_id_by_workspace_path(workspace_path)
+                    if not oc_agent_id:
+                        workspace_name = Path(workspace_path).name  # 直接将工作区的名字作为OC的agent名
+                        create_agent_cmd = f"openclaw agents add --workspace '{workspace_path}' '{workspace_name}' --json"
+                        create_agent_result = await runner.exec_json(create_agent_cmd)
+                        if create_agent_result.exit_code != 0:
+                            raise Exception(create_agent_result.stderr)
+                        log_info(f"create agent {workspace_path} success\n{create_agent_result.stdout}")
+                        oc_agent_id = workspace_name
+                        # 先保存一次OC agent信息
+                        session = await run_in_threadpool(lambda: repo.update_session(
+                            id=session.id,
+                            oc_agent_id=oc_agent_id,
+                        ))
+                    new_resp, list_sessions_result = await oc_new_session_and_list_active(
+                        oc_agent_id=oc_agent_id,
+                        runner=runner,
+                        active=3,
+                    )
+                    log_info(f"{new_resp}")
+
+                    if list_sessions_result.exit_code != 0:
+                        raise Exception(list_sessions_result.stderr)
+
+                    data = json.loads(list_sessions_result.stdout)
+                    sessions = data.get("sessions", [])
+
+                    if not sessions:
+                        raise Exception("No active sessions found")
+
+                    # 按 updatedAt 降序排序，取最新的一个
+                    latest_session = max(sessions, key=lambda s: s.get("updatedAt", 0))
+                    log_info(f"{latest_session}")
+                    session = await run_in_threadpool(lambda: repo.update_session(
+                        id=session.id,
+                        oc_agent_id=oc_agent_id,
+                        oc_session_id=latest_session.get("sessionId"),
+                        oc_session_key=latest_session.get("key"),
+                    ))
+                    oc_session_key = latest_session.get("key")
+                else:
+                    oc_session_key = session.oc_session_key
+            oc_config_json_str = await read_file_as_text_async(Path("/home/user/.openclaw/openclaw.json"))
+            oc_config = json.loads(oc_config_json_str)
+            token = oc_config.get("gateway", {}).get("auth", {}).get("token")
+
+            headers = {"Authorization": f"Bearer {token}", "x-openclaw-session-key": oc_session_key}
+            async for event in fetch_sse_with_retry(
+                    "POST",
+                    "http://127.0.0.1:18789/v1/chat/completions",
+                    headers=headers,
+                    json={
+                        "model": "openclaw",
+                        "messages": [{"role": "user", "content": user_prompt}],
+                        "stream": True,
+                    },
+            ):
+                yield event
+
         # 处理messages
         system_prompt, user_prompt, last_user_prompt, files = await run_in_threadpool(
             lambda: _extract_prompts(payload.messages)
@@ -614,9 +728,20 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                     await asyncio.sleep(0)
                     yield chunk
         else:
-            async for chunk in _run_claude_code_cmd():
-                await asyncio.sleep(0)
-                yield chunk
+            if payload.agent_type == 0:
+                async for chunk in _run_claude_code_cmd():
+                    await asyncio.sleep(0)
+                    yield chunk
+            else:
+                try:
+                    async for chunk in _run_openclaw_cmd():
+                        await asyncio.sleep(0)
+                        yield chunk
+                except Exception as e:
+                    traceback.print_exc()
+                    async for chunk in oc_fail_stream(str(e)):
+                        await asyncio.sleep(0)
+                        yield chunk
 
     return StreamingResponse(
         gen(),
@@ -1226,3 +1351,5 @@ def _generate_qa_batch_content(
         "removed_count": removed_count,
         "needs_rewrite": needs_rewrite
     }
+
+

@@ -7,8 +7,12 @@ from app.models.base import BaseModel
 class Session(BaseModel):
     id = AutoField()
 
-    session_id = CharField(max_length=36, null=True, unique=True, index=True)  # UUID 格式，可为空
+    session_id = CharField(max_length=36, null=True, unique=True, index=True)  # CC的session_id UUID 格式，可为空
     session_alias = CharField(max_length=255, null=True, unique=True, index=True)  # 会话别名，可为空但唯一
+
+    oc_session_id = CharField(max_length=64, null=True, index=True) # cli命令使用
+    oc_session_key = CharField(max_length=128, null=True, index=True) # chat/completions接口使用
+    oc_agent_id = CharField(max_length=64, null=True, index=True) # 记录OC的agent， 通过agent + /new生成新的oc session
 
     note = TextField(null=True)  # 备注信息
 

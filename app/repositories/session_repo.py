@@ -31,6 +31,9 @@ class SessionRepository:
             *,
             session_id: str | None = None,
             session_alias: str | None = None,
+            oc_session_id: str | None = None,
+            oc_session_key: str | None = None,
+            oc_agent_id: str | None = None,
             note: str | None = None,
             workspace_path: str | None = None,
             deploy_id: str | None = None,
@@ -43,6 +46,9 @@ class SessionRepository:
         return Session.create(
             session_id=session_id,
             session_alias=session_alias,
+            oc_session_id=oc_session_id,
+            oc_session_key=oc_session_key,
+            oc_agent_id=oc_agent_id,
             note=note,
             workspace_path=workspace_path,
             deploy_id=deploy_id,
@@ -57,6 +63,9 @@ class SessionRepository:
             *,
             session_id: str | None = ...,  # 使用 ... 区分 None 和未传参
             session_alias: str | None = ...,
+            oc_session_id: str | None = ...,
+            oc_session_key: str | None = ...,
+            oc_agent_id: str | None = ...,
             note: str | None = ...,
             workspace_path: str | None = ...,
             deploy_id: str | None = ...,
@@ -72,6 +81,12 @@ class SessionRepository:
             session.session_id = session_id
         if session_alias is not ...:
             session.session_alias = session_alias
+        if oc_session_id is not ...:
+            session.oc_session_id = oc_session_id
+        if oc_session_key is not ...:
+            session.oc_session_key = oc_session_key
+        if oc_agent_id is not ...:
+            session.oc_agent_id = oc_agent_id
         if note is not ...:
             session.note = note
         if workspace_path is not ...:
@@ -113,6 +128,27 @@ class SessionRepository:
         if not alias:
             return None
         return Session.get_or_none(Session.session_alias == alias)
+
+    def get_oc_agent_id_by_workspace_path(self, workspace_path: str) -> str | None:
+        """通过 workspace_path 查询 oc_agent_id。
+
+        同一个 workspace 可能会有多条 session，但 oc_agent_id 应保持一致。
+        """
+        self._ensure_tables()
+        if not workspace_path:
+            return None
+
+        session = (
+            Session
+            .select(Session.oc_agent_id)
+            .where(
+                (Session.workspace_path == workspace_path) &
+                (Session.oc_agent_id.is_null(False))
+            )
+            .order_by(Session.last_used_at.desc())
+            .first()
+        )
+        return session.oc_agent_id if session else None
 
     def list_sessions(
             self,

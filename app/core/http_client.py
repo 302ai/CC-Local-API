@@ -1,6 +1,6 @@
 import asyncio
 import random
-from typing import Any, Iterable, Optional
+from typing import Any, AsyncIterator, Iterable, Optional
 
 import aiohttp
 
@@ -165,5 +165,91 @@ async def fetch_bytes_with_retry(
         async with resp:
             return await resp.read()
     finally:
+        if owns_session:
+            await session.close()
+
+
+async def fetch_stream_with_retry(
+    method: str,
+    url: str,
+    *,
+    session: aiohttp.ClientSession | None = None,
+    chunk_size: int = 8192,
+    **kwargs: Any,
+) -> AsyncIterator[bytes]:
+    """
+    以流式方式返回响应内容（yield bytes chunks）。
+
+    - session=None -> 自动创建并在流结束/异常/生成器关闭时自动关闭
+    - session!=None -> 复用，不关闭
+
+    用法：
+        async for chunk in fetch_stream_with_retry("GET", url):
+            ...
+
+    注意：这是一个 async generator；务必迭代完成或显式 aclose()，
+    否则在 session=None 时可能延迟关闭连接。
+    """
+    owns_session = session is None
+    if owns_session:
+        session = aiohttp.ClientSession()
+
+    resp: aiohttp.ClientResponse | None = None
+    try:
+        resp = await request_with_retry(method, url, session=session, **kwargs)
+        async with resp:
+            async for chunk in resp.content.iter_chunked(chunk_size):
+                if chunk:
+                    yield chunk
+    finally:
+        if resp is not None:
+            # 生成器被提前关闭时，确保连接被释放
+            resp.release()
+        if owns_session:
+            await session.close()
+
+
+async def fetch_sse_with_retry(
+    method: str,
+    url: str,
+    *,
+    session: aiohttp.ClientSession | None = None,
+    **kwargs: Any,
+) -> AsyncIterator[bytes]:
+    """
+    以 SSE event 边界(\n\n)切分并原样转发，yield 的每一块都是完整的 SSE 事件：
+        b"data: ...\n\n"
+
+    兼容：b"data: [DONE]\n\n"（会作为最后一个事件原样 yield）。
+
+    注意：网络分块可能把一个事件拆开，所以这里会做 buffer 聚合。
+    """
+    owns_session = session is None
+    if owns_session:
+        session = aiohttp.ClientSession()
+
+    resp: aiohttp.ClientResponse | None = None
+    buf = bytearray()
+    try:
+        resp = await request_with_retry(method, url, session=session, **kwargs)
+        async with resp:
+            async for chunk in resp.content.iter_any():
+                if not chunk:
+                    continue
+                buf.extend(chunk)
+                while True:
+                    sep = buf.find(b"\n\n")
+                    if sep == -1:
+                        break
+                    event = bytes(buf[: sep + 2])
+                    del buf[: sep + 2]
+                    if event:
+                        yield event
+            if buf:
+                # 末尾若没有以 \n\n 结束，也尽量原样吐出
+                yield bytes(buf)
+    finally:
+        if resp is not None:
+            resp.release()
         if owns_session:
             await session.close()

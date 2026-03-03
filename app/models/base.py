@@ -63,6 +63,17 @@ def auto_migrate_add_missing_columns(database, models: list[type[Model]]) -> boo
             database.execute_sql(f"ALTER TABLE {table} ADD COLUMN {col_sql}")
             changed = True
 
+            # Backfill existing rows ONLY when the field is NOT NULL and has a non-callable default.
+            # This keeps semantics for nullable fields (NULL remains meaningful).
+            if not f.null:
+                default_val = getattr(f, "default", None)
+                if default_val is not None and not callable(default_val):
+                    # Use bound params for UPDATE (safe), unlike DDL which can't be parametrized in SQLite.
+                    database.execute_sql(
+                        f"UPDATE {table} SET {col_name} = ? WHERE {col_name} IS NULL",
+                        (default_val,),
+                    )
+
     return changed
 
 

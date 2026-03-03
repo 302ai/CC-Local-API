@@ -1,22 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import os
 import secrets
 import shutil
 import string
 import traceback
+from pathlib import Path
 from typing import Dict
 
 import aiohttp
 from fastapi import APIRouter, Depends, Request, Query
 from app.api.response import fail, ok
 from app.core.ai302.deploy_ops import create_302ai_deploy_task, get_302ai_deploy_task_info
+from app.core.command_runner import CommandRunner
 from app.core.config import ROOT_SAVE_PATH
 from app.core.file_content import create_zip_from_directory
-from app.core.log import log_error
+from app.core.log import log_info
 from app.db.session import get_db, run_in_threadpool
+from app.core.oc_ops import oc_new_session_and_list_active
 from app.repositories.session_repo import SessionRepository
 
 
@@ -154,6 +158,9 @@ EXCLUDE_PATTERNS = {
     "bower_components",
 }
 
+# 初始化操作锁 为了获取/new session
+claw_lock = asyncio.Lock()
+
 
 class ProjectInitRequest(BaseModel):
 
@@ -186,24 +193,53 @@ def get_session_repo(db=Depends(get_db)) -> SessionRepository:
 @router.post("/project/init")
 async def init_project(payload: ProjectInitRequest, repo: SessionRepository = Depends(get_session_repo)):
     workspace_path = f"{ROOT_SAVE_PATH}/workspace/{_secure_rand_str()}" if not payload.workspace_path else payload.workspace_path
+    runner = CommandRunner()
+    async with claw_lock:
+        # 查询session别名是否存在
+        if repo.get_session_by_alias(payload.session_id) is not None:
+            return fail("session already exist", status_code=400)
+        # 查询工作区对应的oc_agent是否存在
+        oc_agent_id = repo.get_oc_agent_id_by_workspace_path(workspace_path)
+        if not oc_agent_id:
+            workspace_name = Path(workspace_path).name # 直接将工作区的名字作为OC的agent名
+            create_agent_cmd = f"openclaw agents add --workspace '{workspace_path}' '{workspace_name}' --json"
+            create_agent_result = await runner.exec_json(create_agent_cmd)
+            if create_agent_result.exit_code != 0:
+                return fail(create_agent_result.stderr, status_code=400)
+            log_info(f"create agent {workspace_path} success\n{create_agent_result.stdout}")
+            oc_agent_id = workspace_name
 
-    def op():
-        with repo.atomic():
-            if repo.get_session_by_alias(payload.session_id) is not None:
-                return False, "session already exist"
-
-            repo.create_session(
-                session_alias=payload.session_id,
-                workspace_path=workspace_path,
+            new_resp, list_sessions_result = await oc_new_session_and_list_active(
+                oc_agent_id=oc_agent_id,
+                runner=runner,
+                active=3,
             )
+            log_info(f"{new_resp}")
 
-        return True, "session created"
+            if list_sessions_result.exit_code != 0:
+                return fail(list_sessions_result.stderr, status_code=400)
 
-    is_success, msg = await run_in_threadpool(op)
-    if not is_success:
-        return fail(msg, status_code=400)
-    os.makedirs(workspace_path, exist_ok=True)
-    return ok({"workspace_path": workspace_path, "session_id": payload.session_id, "message": "Initialization succeeded"})
+            data = json.loads(list_sessions_result.stdout)
+            sessions = data.get("sessions", [])
+
+            if not sessions:
+                return fail("No active sessions found", status_code=400)
+
+            # 按 updatedAt 降序排序，取最新的一个
+            latest_session = max(sessions, key=lambda s: s.get("updatedAt", 0))
+            log_info(f"{latest_session}")
+
+        await run_in_threadpool(lambda: repo.create_session(
+            session_alias=payload.session_id,
+            workspace_path=workspace_path,
+            oc_agent_id=oc_agent_id,
+            oc_session_id=latest_session.get("sessionId"),
+            oc_session_key=latest_session.get("key"),
+        ))
+        os.makedirs(workspace_path, exist_ok=True)
+        return ok(
+            {"workspace_path": workspace_path, "session_id": payload.session_id, "message": "Initialization succeeded"})
+
 
 
 @router.post("/deploy", description="封装302ai的异步部署接口成同步响应")
