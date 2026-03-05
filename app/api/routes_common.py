@@ -13,6 +13,6 @@ async def health():
     runner = CommandRunner()
     oc_health_check = await runner.exec_json("openclaw health --json")
     if oc_health_check.exit_code == 0:
-        return ok({"status": "ok"})
-    return fail(oc_health_check.stderr, payload={"status": "fail"})
+        return ok({"status": "ok", "oc_status": "ok"})
+    return ok({"status": "ok", "oc_status": "failed"})
 
