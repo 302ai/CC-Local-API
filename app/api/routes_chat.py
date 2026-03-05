@@ -31,9 +31,8 @@ from app.core.command_runner import CommandRunner
 from app.core.config import ROOT_SAVE_PATH, settings
 from app.core.file_content import create_zip_from_directory, read_file_as_text_async
 from app.core.file_io import download_file_from_url, write_file_async
-from app.core.http_client import fetch_json_with_retry, fetch_sse_with_retry
 from app.core.log import log_error, log_info, log_warning
-from app.core.oc_ops import oc_new_session_and_list_active
+from app.core.oc_ops import oc_new_session_and_list_active, oc_update_session_model, oc_chat_completions_sse
 from app.db.session import get_db, run_in_threadpool
 from app.repositories.session_repo import SessionRepository
 
@@ -687,20 +686,24 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                     oc_session_key = latest_session.get("key")
                 else:
                     oc_session_key = session.oc_session_key
-            oc_config_json_str = await read_file_as_text_async(Path("/home/user/.openclaw/openclaw.json"))
-            oc_config = json.loads(oc_config_json_str)
-            token = oc_config.get("gateway", {}).get("auth", {}).get("token")
+                    oc_agent_id = session.oc_agent_id
+                    workspace_path = session.workspace_path
 
-            headers = {"Authorization": f"Bearer {token}", "x-openclaw-session-key": oc_session_key}
-            async for event in fetch_sse_with_retry(
-                    "POST",
-                    "http://127.0.0.1:18789/v1/chat/completions",
-                    headers=headers,
-                    json={
-                        "model": "openclaw",
-                        "messages": [{"role": "user", "content": user_prompt}],
-                        "stream": True,
-                    },
+            # 通过oc的/chat/completions接口的/model命令重新设置模型
+            await oc_update_session_model(oc_session_key=oc_session_key, oc_model_name=f"ai302/{payload.model}")
+
+            # 保存附件文件
+            file_paths = await _save_attachments(files, workspace_path)
+
+            # 拷贝claude.md
+            await write_file_async(Path(f"{workspace_path}/CLAUDE.md"), claude_md_str)
+
+            final_user_prompt = user_prompt  + " " + ",".join(
+                file_paths) + " ,当前的工作目录是：" + workspace_path + f" ,附件目录是： {workspace_path}/.302ai/attachments" + f" ,如果是编程相关任务，请先阅读{workspace_path}/CLAUDE.md，里面有我的开发习惯"
+            async for event in oc_chat_completions_sse(
+                    oc_session_key=oc_session_key,
+                    user_prompt=final_user_prompt,
+                    timeout=aiohttp.ClientTimeout(total=None, sock_read=120, connect=10),
             ):
                 yield event
 
