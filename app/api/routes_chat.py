@@ -580,7 +580,8 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                     return
 
         async def _run_plugin_cmd():
-            plugin_cmd = f"claude plugin {parse_command_result.data.plugin_args}"
+            plugin_agent = "openclaw" if payload.agent_type == 1 else "claude"
+            plugin_cmd = f"{plugin_agent} plugin {parse_command_result.data.plugin_args}"
             log_info(f"plugin_cmd: {plugin_cmd}")
             plugin_cmd_resp = await runner.exec_json(plugin_cmd)
             if plugin_cmd_resp.exit_code == 0:
@@ -697,9 +698,11 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
 
             # 拷贝claude.md
             await write_file_async(Path(f"{workspace_path}/CLAUDE.md"), claude_md_str)
-
-            final_user_prompt = user_prompt  + " " + ",".join(
-                file_paths) + " ,当前的工作目录是：" + workspace_path + f" ,附件目录是： {workspace_path}/.302ai/attachments" + f" ,如果是编程相关任务，请先阅读{workspace_path}/CLAUDE.md，里面有我的开发习惯"
+            if user_prompt.lstrip().startswith("/"):
+                final_user_prompt = user_prompt
+            else:
+                final_user_prompt = user_prompt  + " " + ",".join(
+                    file_paths) + " ,当前的工作目录是：" + workspace_path + f" ,附件目录是： {workspace_path}/.302ai/attachments" + f" ,如果是编程相关任务，请先阅读{workspace_path}/CLAUDE.md，里面有我的开发习惯"
             async for event in oc_chat_completions_sse(
                     oc_session_key=oc_session_key,
                     user_prompt=final_user_prompt,
