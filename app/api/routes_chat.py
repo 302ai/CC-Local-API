@@ -703,7 +703,7 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
             async for event in oc_chat_completions_sse(
                     oc_session_key=oc_session_key,
                     user_prompt=final_user_prompt,
-                    timeout=aiohttp.ClientTimeout(total=None, sock_read=120, connect=10),
+                    timeout=aiohttp.ClientTimeout(total=None, sock_read=None, connect=30),
             ):
                 yield event
 
