@@ -10,6 +10,44 @@ from asgiref.timeout import timeout
 from app.core.command_runner import CommandRunner, CommandResult
 from app.core.file_content import read_file_as_text_async
 from app.core.http_client import fetch_json_with_retry, fetch_sse_with_retry
+from app.core.log import log_info
+
+
+def _oc_extract_agent_name_from_session_key(oc_session_key: str) -> str | None:
+    # Expected format: agent:<agentName>:<provider>:<uuid>
+    # Example: agent:testoc:openai:90f8496d-3041-4312-93ad-61721b2e32ce
+    parts = oc_session_key.split(":")
+    if len(parts) >= 4 and parts[0] == "agent" and parts[1]:
+        return parts[1]
+    return None
+
+
+async def _oc_read_session_provider_model(
+    *,
+    oc_session_key: str,
+    oc_agent_name: str,
+    base_dir: Path = Path("/home/user/.openclaw/agents"),
+) -> tuple[str | None, str | None]:
+    sessions_path = base_dir / oc_agent_name / "sessions" / "sessions.json"
+    try:
+        sessions_json_str = await read_file_as_text_async(sessions_path)
+        sessions = json.loads(sessions_json_str)
+    except Exception:
+        return None, None
+
+    if not isinstance(sessions, dict):
+        return None, None
+
+    entry = sessions.get(oc_session_key)
+    if not isinstance(entry, dict):
+        return None, None
+
+    provider = entry.get("modelProvider")
+    model = entry.get("model")
+    return (
+        provider if isinstance(provider, str) else None,
+        model if isinstance(model, str) else None,
+    )
 
 
 async def oc_new_session_and_list_active(
@@ -58,33 +96,25 @@ async def oc_has_model_in_openclaw_config(
 ) -> bool:
     """Return True if model already exists in openclaw.json.
 
-    Only checks openclaw.json (models.providers.<provider>.models[].id).
+    Checks openclaw.json (agents.defaults.models.<oc_model_name>).
     """
-
-    provider, _, model_id = oc_model_name.partition("/")
-    if not provider or not model_id:
-        return False
 
     oc_config_json_str = await read_file_as_text_async(oc_config_path)
     oc_config = json.loads(oc_config_json_str)
 
-    models = oc_config.get("models")
+    agents = oc_config.get("agents")
+    if not isinstance(agents, dict):
+        return False
+
+    defaults = agents.get("defaults")
+    if not isinstance(defaults, dict):
+        return False
+
+    models = defaults.get("models")
     if not isinstance(models, dict):
         return False
 
-    providers = models.get("providers")
-    if not isinstance(providers, dict):
-        return False
-
-    provider_conf = providers.get(provider)
-    if not isinstance(provider_conf, dict):
-        return False
-
-    provider_models = provider_conf.get("models")
-    if not isinstance(provider_models, list):
-        return False
-
-    return any(isinstance(m, dict) and m.get("id") == model_id for m in provider_models)
+    return oc_model_name in models
 
 
 async def oc_add_model_via_cli(
@@ -210,6 +240,18 @@ async def oc_update_session_model(
             oc_config_path=oc_config_path,
             chat_completions_url=chat_completions_url,
         )
+
+    # If the session already uses the same provider/model, skip calling /model.
+    agent_name = _oc_extract_agent_name_from_session_key(oc_session_key)
+    if agent_name:
+        cur_provider, cur_model = await _oc_read_session_provider_model(
+            oc_session_key=oc_session_key,
+            oc_agent_name=agent_name,
+        )
+        cur_full = f"{cur_provider}/{cur_model}" if cur_provider and cur_model else ""
+        if cur_full and cur_full == oc_model_name:
+            log_info(f"{oc_model_name} model already set")
+            return {"skipped": True, "reason": "model already set"}
 
     return await oc_set_session_model(
         oc_session_key=oc_session_key,
