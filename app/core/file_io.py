@@ -31,6 +31,18 @@ async def write_file_async(file_path: Path, content: bytes | str):
             await f.write(content)
 
 
+async def append_line_async(file_path: Path, line: str, newline: str = "\n"):
+    """异步追加一行到文件（自动补换行）"""
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # 允许传入不带换行的 line，这里统一确保以 newline 结尾
+    if not line.endswith(("\n", "\r\n")):
+        line = line + newline
+
+    async with aiofiles.open(file_path, "a", encoding="utf-8") as f:
+        await f.write(line)
+
+
 def write_file_sync(file_path: Path, content: bytes):
     """同步写入文件（用于线程池）"""
     file_path.parent.mkdir(parents=True, exist_ok=True)

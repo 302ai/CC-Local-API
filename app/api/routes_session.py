@@ -20,7 +20,7 @@ from app.core.config import ROOT_SAVE_PATH
 from app.core.file_content import create_zip_from_directory
 from app.core.log import log_info
 from app.db.session import get_db, run_in_threadpool
-from app.core.oc_ops import oc_new_session_and_list_active
+from app.core.oc_ops import oc_new_session_and_list_active, add_my_oc_system_prompt_to_agent_md
 from app.repositories.session_repo import SessionRepository
 
 
@@ -217,6 +217,8 @@ async def init_project(payload: ProjectInitRequest, repo: SessionRepository = De
             if create_agent_result.exit_code != 0:
                 return fail(create_agent_result.stderr, status_code=400)
             log_info(f"create agent {workspace_path} success\n{create_agent_result.stdout}")
+            await add_my_oc_system_prompt_to_agent_md(workspace_name)
+
             oc_agent_id = workspace_name
 
             new_resp, list_sessions_result = await oc_new_session_and_list_active(

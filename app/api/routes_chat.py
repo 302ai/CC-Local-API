@@ -32,7 +32,8 @@ from app.core.config import ROOT_SAVE_PATH, settings
 from app.core.file_content import create_zip_from_directory, read_file_as_text_async
 from app.core.file_io import download_file_from_url, write_file_async
 from app.core.log import log_error, log_info, log_warning
-from app.core.oc_ops import oc_new_session_and_list_active, oc_update_session_model, oc_chat_completions_sse
+from app.core.oc_ops import oc_new_session_and_list_active, oc_update_session_model, oc_chat_completions_sse, \
+    add_my_oc_system_prompt_to_agent_md
 from app.db.session import get_db, run_in_threadpool
 from app.repositories.session_repo import SessionRepository
 
@@ -613,6 +614,7 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                     if create_agent_result.exit_code != 0:
                         raise Exception(create_agent_result.stderr)
                     log_info(f"create agent {workspace_path} success\n{create_agent_result.stdout}")
+                    await add_my_oc_system_prompt_to_agent_md(workspace_name)
                     oc_agent_id = workspace_name
                     new_resp, list_sessions_result = await oc_new_session_and_list_active(
                         oc_agent_id=oc_agent_id,
@@ -653,6 +655,7 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                         if create_agent_result.exit_code != 0:
                             raise Exception(create_agent_result.stderr)
                         log_info(f"create agent {workspace_path} success\n{create_agent_result.stdout}")
+                        await add_my_oc_system_prompt_to_agent_md(workspace_name)
                         oc_agent_id = workspace_name
                         # 先保存一次OC agent信息
                         session = await run_in_threadpool(lambda: repo.update_session(
