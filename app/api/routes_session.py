@@ -166,6 +166,7 @@ class ProjectInitRequest(BaseModel):
 
     session_id: str = Field(..., description="实际是session_alias, 对外暴露成session_id，让用户接触不到真正的cc session_id")
     workspace_path: str = Field(..., description="工作区路径")
+    agent_type: int = Field(0, description="智能体类型， 0=claude code；1=openclaw")
 
 
 class SessionUpdateRequest(BaseModel):
@@ -198,6 +199,15 @@ async def init_project(payload: ProjectInitRequest, repo: SessionRepository = De
         # 查询session别名是否存在
         if repo.get_session_by_alias(payload.session_id) is not None:
             return fail("session already exist", status_code=400)
+        if payload.agent_type == 0:
+            await run_in_threadpool(lambda: repo.create_session(
+                session_alias=payload.session_id,
+                workspace_path=workspace_path
+            ))
+            os.makedirs(workspace_path, exist_ok=True)
+            return ok(
+                {"workspace_path": workspace_path, "session_id": payload.session_id,
+                 "message": "Initialization succeeded"})
         # 查询工作区对应的oc_agent是否存在
         oc_agent_id = repo.get_oc_agent_id_by_workspace_path(workspace_path)
         if not oc_agent_id:
