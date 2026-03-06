@@ -12,6 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends nodejs \
     && npm install -g @anthropic-ai/claude-code \
     && npm install -g openclaw@latest \
+    && npm install -g clawhub@latest \
+    && npm install -g @playwright/cli@latest \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
     && rm -rf /root/.npm \
@@ -26,7 +28,6 @@ RUN mkdir -p /data /data/user /app /home/user/.claude /home/user/.openclaw /home
     chmod 755 /data /app /home/user && \
     chmod 775 /home/user/db /home/user/.claude /home/user/.openclaw
 
-
 # 安装 Python 依赖
 WORKDIR /app
 COPY requirements.txt ./
@@ -39,5 +40,4 @@ COPY --chown=user:user . /app
 ENV HOME=/home/user
 
 EXPOSE 8000 18789
-#CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 CMD ["sh", "-c", "openclaw gateway run --port 18789 --bind lan & uvicorn main:app --host 0.0.0.0 --port 8000"]
