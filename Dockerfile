@@ -14,6 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && npm install -g openclaw@latest \
     && npm install -g clawhub@latest \
     && npm install -g @playwright/cli@latest \
+    && corepack enable \
+    && corepack prepare pnpm@latest --activate \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
     && rm -rf /root/.npm \
@@ -36,6 +38,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 复制代码
 USER user
 COPY --chown=user:user . /app
+
+# 安装 openclaw-china 插件（channels）
+# 这里使用用户目录，避免写入全局路径导致权限问题
+RUN git clone --depth 1 https://github.com/BytePioneer-AI/openclaw-china.git /home/user/openclaw-china \
+    && cd /home/user/openclaw-china \
+    && pnpm install \
+    && pnpm build \
+    && openclaw plugins install -l ./packages/channels \
+    && cd /home/user \
+    && rm -rf /home/user/openclaw-china
 
 ENV HOME=/home/user
 
