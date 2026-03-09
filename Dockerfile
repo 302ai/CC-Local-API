@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sudo \
     curl \
     gnupg \
+    zip \
     ca-certificates \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
