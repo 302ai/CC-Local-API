@@ -15,8 +15,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && npm install -g openclaw@latest \
     && npm install -g clawhub@latest \
     && npm install -g @playwright/cli@latest \
-    && openclaw plugins install @openclaw-china/dingtalk \
-    && openclaw plugins install @openclaw-china/qqbot \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
     && rm -rf /root/.npm \
@@ -41,6 +39,8 @@ USER user
 COPY --chown=user:user . /app
 
 ENV HOME=/home/user
+
+RUN openclaw plugins install @openclaw-china/channels
 
 EXPOSE 8000 18789
 CMD ["sh", "-c", "openclaw gateway run --port 18789 --bind lan & uvicorn main:app --host 0.0.0.0 --port 8000"]
