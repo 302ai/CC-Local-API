@@ -40,7 +40,24 @@ COPY --chown=user:user . /app
 
 ENV HOME=/home/user
 
+# 安装插件
 RUN openclaw plugins install @openclaw-china/channels
 
+# 把插件数据备份到不会被挂载覆盖的目录
+RUN mkdir -p /app/.openclaw-extensions-backup && \
+    cp -a /home/user/.openclaw/extensions /app/.openclaw-extensions-backup/
+
 EXPOSE 8000 18789
-CMD ["sh", "-c", "openclaw gateway run --port 18789 --bind lan & uvicorn main:app --host 0.0.0.0 --port 8000"]
+
+# 启动时检查 channels 插件是否存在，不存在才恢复
+CMD ["sh", "-c", "\
+    if [ ! -d \"/home/user/.openclaw/extensions/channels\" ]; then \
+        mkdir -p /home/user/.openclaw/extensions && \
+        cp -a /app/.openclaw-extensions-backup/extensions/* /home/user/.openclaw/extensions/ 2>/dev/null || true; \
+        echo 'Restored openclaw extensions (channels plugin was missing)'; \
+    else \
+        echo 'channels plugin exists, skipping restore'; \
+    fi && \
+    openclaw gateway run --port 18789 --bind lan & \
+    uvicorn main:app --host 0.0.0.0 --port 8000 \
+"]
