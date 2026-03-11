@@ -694,7 +694,10 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                     workspace_path = session.workspace_path
 
             # 通过oc的/chat/completions接口的/model命令重新设置模型
-            await oc_update_session_model(oc_session_key=oc_session_key, oc_model_name=f"ai302/{payload.model}")
+            if payload.model.startswith("cc-") or payload.model.endswith("-for-coding"):
+                await oc_update_session_model(oc_session_key=oc_session_key, oc_model_name=f"ai302-coding/{payload.model}")
+            else:
+                await oc_update_session_model(oc_session_key=oc_session_key, oc_model_name=f"ai302/{payload.model}")
 
             # 保存附件文件
             file_paths = await _save_attachments(files, workspace_path)
