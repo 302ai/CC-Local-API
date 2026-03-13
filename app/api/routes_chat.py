@@ -22,7 +22,7 @@ import aiohttp
 from fastapi import APIRouter, Depends, Request, Query
 from starlette.responses import StreamingResponse
 
-from app.api.response import fail, ok, oc_fail_stream
+from app.api.response import fail, ok, oc_fail_stream, gpt_stream_chunk
 from app.api.routes_command import sse_message
 from app.api.routes_session import claw_lock
 from app.core.ai302.deploy_ops import create_302ai_deploy_task, get_302ai_deploy_task_info
@@ -714,7 +714,35 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                     user_prompt=final_user_prompt,
                     timeout=aiohttp.ClientTimeout(total=None, sock_read=None, connect=30),
             ):
-                yield event
+                # event 是 bytes，需要对应处理
+                if event.strip() == b"data: [DONE]":
+
+                    check_cmd = """find . -maxdepth 4 \( -path "./claude" -o -path "./claude/*" -o -path "./node_modules" -o -path "./node_modules/*" -o -path "./.git" -o -path "./.git/*" -o -path "./venv" -o -path "./venv/*" -o -path "./.venv" -o -path "./.venv/*" -o -path "./env" -o -path "./env/*" -o -path "./__pycache__" -o -path "./__pycache__/*" \) -prune -o -type f \( -name "package.json" -o -name "pnpm-lock.yaml" -o -name "yarn.lock" -o -name "package-lock.json" -o -name "next.config.*" -o -name "vite.config.*" -o -name "vue.config.*" -o -name "nuxt.config.*" -o -name "svelte.config.*" -o -name "astro.config.*" -o -name "remix.config.*" -o -name "angular.json" -o -name "gatsby-config.*" -o -path "./index.html" -o -path "*/public/index.html" -o -path "./server.js" -o -path "./app.js" -o -path "./index.js" -o -path "./main.js" -o -path "./server.ts" -o -path "./app.ts" -o -path "./index.ts" -o -path "./main.ts" -o -path "./src/index.js" -o -path "./src/index.ts" -o -path "./src/index.jsx" -o -path "./src/index.tsx" -o -path "./src/main.js" -o -path "./src/main.ts" -o -path "./src/main.jsx" -o -path "./src/main.tsx" -o -path "./src/App.vue" -o -path "./src/app.js" -o -path "./src/app.ts" -o -path "./src/app.jsx" -o -path "./src/app.tsx" -o -path "./src/server.js" -o -path "./src/server.ts" -o \( -path "./src/*" -a \( -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" -o -name "*.vue" \) \) \)"""
+
+                    if payload.enable_pre_deploy_check:
+
+                        pre_deploy_check_result = await runner.exec_json(command=check_cmd, cwd=workspace_path)
+                        if pre_deploy_check_result.exit_code == 0:
+                            if pre_deploy_check_result.stdout:
+                                deploy_check_info = json.dumps({
+                                    "type": "pre_deploy_check",
+                                    "success": True,
+                                    "find_file": pre_deploy_check_result.stdout,
+                                })
+                            else:
+                                deploy_check_info = json.dumps({
+                                    "type": "pre_deploy_check",
+                                    "success": False,
+                                    "find_file": pre_deploy_check_result.stdout,
+                                })
+
+                            # 插入自定义文本 chunk
+                            chunk = gpt_stream_chunk(f"{json.dumps(deploy_check_info, ensure_ascii=False)}")
+                            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
+                    # 放行 [DONE]
+                    yield event
+                else:
+                    yield event
 
         # 处理messages
         system_prompt, user_prompt, last_user_prompt, files = await run_in_threadpool(

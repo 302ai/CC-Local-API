@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any, Optional
 
 
@@ -67,6 +68,50 @@ def gpt_stream_error_chunk(message: str) -> list[dict]:
     }
 
     return [content_chunk, stop_chunk]
+
+
+def gpt_stream_chunk(content: str, finish: bool = False) -> dict:
+    """返回单个正常的流式文本 chunk。
+
+    Args:
+        content: 要发送的文本内容。当 finish=True 时此参数被忽略。
+        finish: 是否为结束标记 chunk。
+
+    Returns:
+        一个符合 OpenAI chat.completion.chunk 格式的字典。
+    """
+    base = {
+        "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": "openclaw",
+    }
+
+    if finish:
+        # 结束标记 chunk
+        return {
+            **base,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+    else:
+        # 正常内容 chunk
+        return {
+            **base,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": content},
+                    "finish_reason": None,
+                }
+            ],
+        }
+
 
 async def oc_fail_stream(message: str):
     chunks = gpt_stream_error_chunk(message)
