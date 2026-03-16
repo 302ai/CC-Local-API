@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import os
 import shutil
+import asyncio
 
 from app.api.request import parse_request_data
 from app.core.config import MAX_FILE_SIZE
@@ -21,6 +22,20 @@ from app.core.file_io import download_file_from_url, write_file_async
 from app.db.session import run_in_threadpool
 
 router = APIRouter()
+
+# In-process per-file write locks + last seen timestamp.
+# Note: if you run multiple workers/processes, this only protects within a process.
+_FILE_WRITE_LOCKS: dict[str, asyncio.Lock] = {}
+_FILE_LAST_TS: dict[str, int] = {}
+
+
+def _get_file_lock(key: str) -> asyncio.Lock:
+    lock = _FILE_WRITE_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _FILE_WRITE_LOCKS[key] = lock
+    return lock
+
 
 # 文本文件扩展名白名单
 TEXT_EXT_WHITELIST = {
@@ -82,6 +97,7 @@ class FileDownloadRequest(BaseModel):
 class FileUploadItem(BaseModel):
     save_path: str = Field(..., description="File save path")
     content: str = Field(..., description="File content (base64 or URL)")
+    ts: int = Field(0, description="Client version timestamp (ms). Newer wins. 0 disables version control.")
 
 
 class FileBatchUploadRequest(BaseModel):
@@ -229,8 +245,24 @@ async def batch_upload_files(payload: FileBatchUploadRequest):
                     })
                     continue
 
+            lock_key = str(save_path)
+            lock = _get_file_lock(lock_key)
+
             # 写入文件（使用 aiofiles 异步写入）
-            await write_file_async(save_path, content)
+            async with lock:
+                last_ts = _FILE_LAST_TS.get(lock_key, -1)
+                if file_item.ts > 0 and file_item.ts <= last_ts:
+                    upload_results.append({
+                        "success": True,
+                        "skipped": True,
+                        "reason": f"stale update: ts={file_item.ts} <= last_ts={last_ts}",
+                        "file": {"save_path": file_item.save_path},
+                    })
+                    continue
+
+                await write_file_async(save_path, content)
+                if file_item.ts > 0:
+                    _FILE_LAST_TS[lock_key] = file_item.ts
 
             upload_results.append({
                 "success": True,
