@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g @anthropic-ai/claude-code \
+    && npm install -g @anthropic-ai/claude-code@latest \
     && npm install -g openclaw@latest \
     && npm install -g clawhub@latest \
     && npm install -g @playwright/cli@latest \
@@ -24,10 +24,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN groupadd -r user && useradd -r -g user -m -s /bin/bash user
 
 # 创建目录并设置权限
-RUN mkdir -p /data /data/user /app /home/user/.claude /home/user/.openclaw /home/user/db && \
+RUN mkdir -p /data /data/user /app /home/user/.claude /home/user/.openclaw /home/user/db /home/user/skills && \
     chown -R user:user /data /app /home/user && \
     chmod 755 /data /app /home/user && \
-    chmod 775 /home/user/db /home/user/.claude /home/user/.openclaw
+    chmod 775 /home/user/db /home/user/.claude /home/user/.openclaw /home/user/skills
 
 # 安装 Python 依赖
 WORKDIR /app
@@ -37,6 +37,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 复制代码
 USER user
 COPY --chown=user:user . /app
+
+# 复制自定义 skills 到不会被挂载覆盖的目录
+COPY --chown=user:user skills/ /app/.skills-backup/
 
 ENV HOME=/home/user
 
@@ -58,6 +61,14 @@ CMD ["sh", "-c", "\
     else \
         echo 'channels plugin exists, skipping restore'; \
     fi && \
+    mkdir -p /home/user/skills && \
+    for p in /app/.skills-backup/*; do \
+        name=\"$(basename \"$p\")\"; \
+        if [ ! -e \"/home/user/skills/$name\" ]; then \
+            cp -a \"$p\" /home/user/skills/ 2>/dev/null || true; \
+            echo \"Restored skill entry: $name\"; \
+        fi; \
+    done && \
     openclaw gateway run --port 18789 --bind lan & \
-    uvicorn main:app --host 0.0.0.0 --port 8000 \
+    uvicorn main:app --host 0.0.0.0 --port 8000\
 "]
