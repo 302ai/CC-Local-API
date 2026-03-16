@@ -9,9 +9,11 @@ from app.api.routes_skill import router as skill_router
 from app.api.routes_chat import router as chat_router
 from app.api.routes_session import router as session_router
 from app.api.routes_mcp import router as mcp_router
+from app.api.routes_oc import router as oc_router
 
 SANDBOX_PREFIX = "/302/claude-code/sandbox"
 CC_PREFIX = "/302/claude-code"
+OC_PREFIX = "/302/openclaw"
 
 CHAT_PREFIX = "/api/v1"
 
@@ -20,6 +22,7 @@ sandbox_router = APIRouter(prefix=SANDBOX_PREFIX, tags=["Sandbox"])
 
 # base_router = APIRouter()
 
+oc_base_router = APIRouter(prefix=OC_PREFIX, tags=["OpenClaw"])
 cc_router = APIRouter(prefix=CC_PREFIX, tags=["Base"])
 
 chat_base_router = APIRouter(prefix=CHAT_PREFIX, tags=["Chat"])
@@ -34,3 +37,5 @@ sandbox_router.include_router(mcp_router)
 
 
 cc_router.include_router(skill_router)
+
+oc_base_router.include_router(oc_router)

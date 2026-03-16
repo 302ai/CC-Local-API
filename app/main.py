@@ -10,7 +10,7 @@ import shutil
 import aiohttp
 from fastapi import FastAPI
 
-from app.api.routes import cc_router, sandbox_router, chat_base_router
+from app.api.routes import cc_router, sandbox_router, chat_base_router, oc_base_router
 from app.core.common import short_hash
 from app.core.config import ROOT_SAVE_PATH
 from app.core.config import settings
@@ -20,15 +20,18 @@ from app.db.database import db_state_default
 from app.models.base import bind_models, auto_migrate_add_missing_columns, detect_missing_columns
 from app.models.skill import Skill
 from app.models.session import Session
+from app.models.job_session_agent import JobSessionAgent
+from app.models.job_sync_log import JobSyncLog
+
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.db = db_state_default()
 
-    bind_models(app.state.db.database, [Skill, Session])
+    bind_models(app.state.db.database, [Skill, Session, JobSessionAgent])
 
-    models = [Skill, Session]
+    models = [Skill, Session, JobSessionAgent]
 
     # Detect whether migration is needed. If needed, backup first, then migrate.
     missing_cols = detect_missing_columns(app.state.db.database, models)
@@ -108,7 +111,73 @@ async def lifespan(app: FastAPI):
                 error=str(e),
             )
 
+    async def _sync_oc_cron_jobs_forever():
+        from app.db.database import connect_db, close_db
+        from app.db.session import run_in_threadpool
+        from app.repositories.job_session_agent_repo import JobSessionAgentRepository
+
+        jobs_path = Path("/home/user/.openclaw/cron/jobs.json")
+
+        while True:
+            try:
+                raw = jobs_path.read_text(encoding="utf-8")
+                import json
+                payload = json.loads(raw)
+                jobs = payload.get("jobs") if isinstance(payload, dict) else None
+                if not isinstance(jobs, list):
+                    raise ValueError("jobs.json missing 'jobs' list")
+            except FileNotFoundError:
+                await asyncio.sleep(60)
+                continue
+            except Exception as e:
+                log_info("OpenClaw jobs sync skipped.", error=str(e))
+                await asyncio.sleep(60)
+                continue
+
+            normalized: list[dict] = []
+            for job in jobs:
+                if not isinstance(job, dict):
+                    continue
+                job_id = job.get("id")
+                if not job_id:
+                    continue
+                normalized.append(
+                    {
+                        "job_id": str(job_id),
+                        "agent_name": job.get("agentId") or "",
+                        "session_key": job.get("sessionKey") or "",
+                        "enable": bool(job.get("enabled")),
+                    }
+                )
+
+            def _write_once() -> None:
+                db = app.state.db.database
+                connect_db(db)
+                try:
+                    repo = JobSessionAgentRepository(db)
+                    with db.atomic():
+                        for j in normalized:
+                            session_alias = None
+                            if j["session_key"]:
+                                sess = Session.get_or_none(Session.oc_session_key == j["session_key"])
+                                if sess:
+                                    session_alias = sess.session_alias
+
+                            repo.upsert_by_job_id(
+                                job_id=j["job_id"],
+                                session_key=j["session_key"],
+                                agent_name=j["agent_name"],
+                                session_alias=session_alias,
+                                enable=j["enable"],
+                            )
+                finally:
+                    close_db(db)
+
+            await run_in_threadpool(_write_once)
+            await asyncio.sleep(60)
+
     asyncio.create_task(_load_official_skills_once())
+    asyncio.create_task(_sync_oc_cron_jobs_forever())
     yield
 
 
@@ -120,3 +189,4 @@ app.add_middleware(RequestIDMiddleware)
 app.include_router(cc_router)
 app.include_router(sandbox_router)
 app.include_router(chat_base_router)
+app.include_router(oc_base_router)

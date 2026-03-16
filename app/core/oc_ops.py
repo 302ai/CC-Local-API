@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,393 @@ def _oc_extract_agent_name_from_session_key(oc_session_key: str) -> str | None:
     if len(parts) >= 4 and parts[0] == "agent" and parts[1]:
         return parts[1]
     return None
+
+
+async def oc_list_cron_jobs_by_session_key(
+    *,
+    session_key: str,
+    jobs_json_path: Path = Path("/home/user/.openclaw/cron/jobs.json"),
+) -> list[dict[str, Any]]:
+    """List OpenClaw cron jobs that belong to a given sessionKey.
+
+    Matching rule:
+    - A job matches only when job["sessionKey"] exists and equals the given session_key.
+    - If sessionKey field is missing, it's treated as non-match.
+
+    Returns the raw job dicts (can be empty).
+    """
+
+    if not session_key:
+        return []
+
+    try:
+        jobs_json_str = await read_file_as_text_async(jobs_json_path)
+        data = json.loads(jobs_json_str)
+    except Exception:
+        return []
+
+    if not isinstance(data, dict):
+        return []
+
+    jobs = data.get("jobs")
+    if not isinstance(jobs, list):
+        return []
+
+    matched: list[dict[str, Any]] = []
+
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+
+        job_session_key = job.get("sessionKey")
+        if job_session_key != session_key:
+            continue
+
+        matched.append(job)
+
+    return matched
+
+
+async def oc_list_cron_job_ids_by_session_key(
+    *,
+    session_key: str,
+    jobs_json_path: Path = Path("/home/user/.openclaw/cron/jobs.json"),
+) -> list[str]:
+    """List OpenClaw cron job ids that belong to a given sessionKey.
+
+    Returns a list of job id strings (can be empty).
+    """
+
+    jobs = await oc_list_cron_jobs_by_session_key(
+        session_key=session_key,
+        jobs_json_path=jobs_json_path,
+    )
+
+    ids: list[str] = []
+    for job in jobs:
+        job_id = job.get("id")
+        if isinstance(job_id, str) and job_id:
+            ids.append(job_id)
+
+    return ids
+
+
+def _oc_parse_cron_job_id_from_session_key(key: str) -> str | None:
+    # Examples:
+    # - agent:main:cron:<job_id>
+    # - agent:main:cron:<job_id>:run:<run_id>
+    if ":cron:" not in key:
+        return None
+
+    parts = key.split(":")
+    # Find the first "cron" marker and take the next segment as job_id.
+    # This is resilient to prefixes like "agent:main".
+    for i, p in enumerate(parts):
+        if p == "cron" and i + 1 < len(parts):
+            job_id = parts[i + 1]
+            return job_id or None
+
+    return None
+
+
+def _oc_is_heartbeat_session_entry(entry: dict) -> bool:
+    # Heartbeat sessions don't necessarily have "cron" in the key.
+    # They can be identified via lastTo == "heartbeat".
+    return entry.get("lastTo") == "heartbeat"
+
+
+def _oc_session_event_content_to_text(content: Any) -> str:
+    # OpenClaw/Claude Code session log uses content as a list of typed blocks.
+    # We only need text messages for chat context.
+    if isinstance(content, str):
+        return content.strip()
+
+    if not isinstance(content, list):
+        return ""
+
+    parts: list[str] = []
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "text":
+            txt = item.get("text")
+            if isinstance(txt, str) and txt:
+                parts.append(txt)
+
+    return "\n".join(parts).strip()
+
+
+import json
+
+
+def _oc_session_events_to_openai_messages(events: list[dict]) -> list[dict]:
+    out: list[dict] = []
+
+    for ev in events:
+        if not isinstance(ev, dict) or ev.get("type") != "message":
+            continue
+
+        msg = ev.get("message")
+        if not isinstance(msg, dict):
+            continue
+
+        role = msg.get("role")
+
+        # ── 1. Handle toolResult → OpenAI "tool" role ──────────────────
+        if role == "toolResult":
+            tool_call_id = msg.get("toolCallId")
+            if not tool_call_id:
+                continue
+
+            text = _oc_session_event_content_to_text(msg.get("content"))
+            if not text and msg.get("details"):
+                text = json.dumps(msg["details"], ensure_ascii=False)
+
+            out.append({
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": text or "",
+            })
+            continue
+
+        # ── 2. Handle normal user / assistant / system messages ─────────
+        if role not in ("user", "assistant", "system"):
+            continue
+
+        content_raw = msg.get("content")
+
+        # ── 3. Extract toolCalls embedded in content array ──────────────
+        #
+        # Open-Canvas 格式中，assistant 的 content 是一个数组，可能包含：
+        #   {"type": "text", "text": "..."}
+        #   {"type": "thinking", "thinking": "..."}
+        #   {"type": "toolCall", "id": "...", "name": "...", "arguments": {...}}
+        #
+        # 我们需要：
+        #   - 把 text 类型拼成 content 字符串
+        #   - 把 toolCall 类型提取为 OpenAI tool_calls
+        #   - thinking 类型忽略（或可选保留）
+
+        oai_tool_calls = []
+        text_parts = []
+
+        if isinstance(content_raw, list):
+            for block in content_raw:
+                if not isinstance(block, dict):
+                    continue
+
+                block_type = block.get("type")
+
+                if block_type == "toolCall":
+                    # ── 从 content 数组中提取 toolCall ──
+                    tc_id = block.get("id") or block.get("toolCallId")
+                    func_name = block.get("name") or block.get("toolName")
+                    func_args = block.get("arguments") or block.get("input")
+
+                    if tc_id and func_name:
+                        if not isinstance(func_args, str):
+                            func_args = json.dumps(func_args, ensure_ascii=False) if func_args else "{}"
+                        oai_tool_calls.append({
+                            "id": tc_id,
+                            "type": "function",
+                            "function": {
+                                "name": func_name,
+                                "arguments": func_args,
+                            },
+                        })
+
+                elif block_type == "text":
+                    t = block.get("text")
+                    if t:
+                        text_parts.append(t)
+
+                elif block_type == "thinking":
+                    # 跳过 thinking 块，不发给 OpenAI
+                    pass
+
+        elif isinstance(content_raw, str):
+            text_parts.append(content_raw)
+
+        text = "\n".join(text_parts) if text_parts else None
+
+        # Filter known gateway/tooling validation noise
+        if role == "assistant" and isinstance(text, str) and text.startswith(
+            "[Error: request could not be processed]"
+        ):
+            continue
+
+        # ── 4. Also check top-level toolCalls field (fallback) ──────────
+        if role == "assistant" and not oai_tool_calls:
+            top_level_tcs = msg.get("toolCalls") or msg.get("tool_calls")
+            if top_level_tcs and isinstance(top_level_tcs, list):
+                for tc in top_level_tcs:
+                    if not isinstance(tc, dict):
+                        continue
+                    tc_id = tc.get("id") or tc.get("toolCallId")
+                    func_name = (
+                        tc.get("function", {}).get("name")
+                        or tc.get("toolName")
+                        or tc.get("name")
+                    )
+                    func_args = (
+                        tc.get("function", {}).get("arguments")
+                        or tc.get("arguments")
+                        or tc.get("input")
+                    )
+                    if not tc_id or not func_name:
+                        continue
+                    if not isinstance(func_args, str):
+                        func_args = json.dumps(func_args, ensure_ascii=False) if func_args else "{}"
+                    oai_tool_calls.append({
+                        "id": tc_id,
+                        "type": "function",
+                        "function": {
+                            "name": func_name,
+                            "arguments": func_args,
+                        },
+                    })
+
+        # ── 5. Build the final message dict ─────────────────────────────
+        entry: dict = {"role": role, "content": text}
+
+        if role == "assistant" and oai_tool_calls:
+            entry["tool_calls"] = oai_tool_calls
+            # OpenAI 允许 content 为 null 当有 tool_calls 时
+            if not entry["content"]:
+                entry["content"] = None
+
+        out.append(entry)
+
+    return out
+
+
+
+async def read_jsonl_as_list(path: Path) -> list[dict[str, Any]]:
+    jsonl_str = await read_file_as_text_async(path)
+
+    out: list[dict[str, Any]] = []
+    for line in jsonl_str.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(obj, dict):
+            out.append(obj)
+
+    return out
+
+
+async def oc_session_id_to_openai_messages(
+    *,
+    oc_agent_name: str,
+    session_id: str,
+    base_dir: Path = Path("/home/user/.openclaw/agents"),
+) -> list[dict]:
+    """Load /home/user/.openclaw/agents/<agent>/sessions/<sessionId>.jsonl and convert to messages."""
+
+    if not session_id:
+        return []
+
+    log_path = base_dir / oc_agent_name / "sessions" / f"{session_id}.jsonl"
+    try:
+        jsonl_str = await read_file_as_text_async(log_path)
+    except Exception:
+        return []
+
+    events: list[dict] = []
+    for line in jsonl_str.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(ev, dict):
+            events.append(ev)
+
+    return _oc_session_events_to_openai_messages(events)
+
+
+async def oc_list_exec_session_ids_from_sessions_json(
+    *,
+    oc_agent_name: str = "main",
+    base_dir: Path = Path("/home/user/.openclaw/agents"),
+    cron_last_n: int = 10,
+) -> dict:
+    """Parse OpenClaw sessions.json and extract execution context sessionIds.
+
+    Returns:
+      {
+        "cron": {"<job_id>": ["<sessionId>", ... up to last N by updatedAt]},
+        "heartbeat": ["<sessionId>", ...]
+      }
+
+    Rules:
+    - Cron: group by job_id parsed from the session key segment after ":cron:".
+      Within each job_id, sort by updatedAt asc and keep the last N sessionIds.
+    - Heartbeat: collect all entries where lastTo == "heartbeat".
+      Returned as a list sorted by updatedAt asc.
+    """
+
+    sessions_path = base_dir / oc_agent_name / "sessions" / "sessions.json"
+    try:
+        sessions_json_str = await read_file_as_text_async(sessions_path)
+        sessions = json.loads(sessions_json_str)
+    except Exception:
+        return {"cron": {}, "heartbeat": []}
+
+    if not isinstance(sessions, dict):
+        return {"cron": {}, "heartbeat": []}
+
+    cron_map: dict[str, list[tuple[int, str]]] = {}
+    heartbeat: list[tuple[int, str]] = []
+
+    for key, entry in sessions.items():
+        if not isinstance(key, str) or not isinstance(entry, dict):
+            continue
+
+        session_id = entry.get("sessionId")
+        if not isinstance(session_id, str) or not session_id:
+            continue
+
+        updated_at = entry.get("updatedAt")
+        updated_at_int = updated_at if isinstance(updated_at, int) else 0
+
+        job_id = _oc_parse_cron_job_id_from_session_key(key)
+        if job_id:
+            cron_map.setdefault(job_id, []).append((updated_at_int, session_id))
+
+        if _oc_is_heartbeat_session_entry(entry):
+            heartbeat.append((updated_at_int, session_id))
+
+    cron_out: dict[str, list[str]] = {}
+    for job_id, items in cron_map.items():
+        items.sort(key=lambda x: x[0])
+        last_items = items[-cron_last_n:]
+        # De-duplicate while preserving updatedAt order.
+        seen: set[str] = set()
+        out: list[str] = []
+        for _, sid in last_items:
+            if sid in seen:
+                continue
+            seen.add(sid)
+            out.append(sid)
+        cron_out[job_id] = out
+
+    heartbeat.sort(key=lambda x: x[0])
+    seen_hb: set[str] = set()
+    heartbeat_out: list[str] = []
+    for _, sid in heartbeat:
+        if sid in seen_hb:
+            continue
+        seen_hb.add(sid)
+        heartbeat_out.append(sid)
+
+    return {"cron": cron_out, "heartbeat": heartbeat_out}
 
 
 async def _oc_read_session_provider_model(
@@ -503,8 +891,8 @@ You are free to edit `HEARTBEAT.md` with a short checklist or reminders. Keep it
 
 - Exact timing matters ("9:00 AM sharp every Monday")
 - Task needs isolation from main session history
-- You want a different model or thinking level for the task
 - One-shot reminders ("remind me in 20 minutes")
+- You want a different model or thinking level for the task
 - Output should deliver directly to a channel without main session involvement
 
 **Tip:** Batch similar periodic checks into `HEARTBEAT.md` instead of creating multiple cron jobs. Use cron for precise schedules and standalone tasks.
@@ -569,3 +957,13 @@ This is a starting point. Add your own conventions, style, and rules as you figu
 """
 
     await write_file_async(Path(f"/home/user/workspace/{workspace_name}/AGENTS.md"), add_prompt)
+
+
+if __name__ == "__main__":
+
+    async def main():
+
+        print(await oc_list_exec_session_ids_from_sessions_json(base_dir=Path(r"C:\Users\hjj\Desktop\qiuhui\.openclaw\agents")))
+        print(await oc_session_id_to_openai_messages(oc_agent_name="main", session_id="7e2f5c2b-6644-4278-b2e0-196ecd7bae5e", base_dir=Path(r"C:\Users\hjj\Desktop\qiuhui\.openclaw\agents")))
+
+    asyncio.run(main())
