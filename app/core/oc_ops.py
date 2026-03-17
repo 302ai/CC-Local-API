@@ -811,6 +811,8 @@ Skills provide your tools. When you need one, check its `SKILL.md`. Keep local n
 
 **🔍 Default Search Tool:** Use `302ai-search` skill for all web searches (news, prices, real-time info). It's configured and ready with AI302_API_KEY.
 
+**📂 Skill Priority:** Always check global skills first (`/home/user/skills/`) before system skills (`/usr/lib/node_modules/openclaw/skills/`). Only use workspace skills if neither exists.
+
 **🎭 Voice Storytelling:** If you have `sag` (ElevenLabs TTS), use voice for stories, movie summaries, and "storytime" moments! Way more engaging than walls of text. Surprise people with funny voices.
 
 **📝 Platform Formatting:**
