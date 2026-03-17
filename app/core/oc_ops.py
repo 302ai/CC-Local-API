@@ -443,7 +443,7 @@ async def oc_new_session_and_list_active(
     *,
     oc_agent_id: str,
     runner: CommandRunner,
-    active: int = 3,
+    active: int = 5,
     oc_config_path: Path = Path("/home/user/.openclaw/openclaw.json"),
     chat_completions_url: str = "http://127.0.0.1:18789/v1/chat/completions",
 ) -> tuple[Any, CommandResult]:
@@ -474,7 +474,6 @@ async def oc_new_session_and_list_active(
     list_sessions_result = await runner.exec_json(
         f"openclaw sessions --agent '{oc_agent_id}' --json --active {active}"
     )
-
     return new_resp, list_sessions_result
 
 

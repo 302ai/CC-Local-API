@@ -230,7 +230,7 @@ async def init_project(payload: ProjectInitRequest, repo: SessionRepository = De
 
             if list_sessions_result.exit_code != 0:
                 return fail(list_sessions_result.stderr, status_code=400)
-
+            log_info(list_sessions_result.stdout)
             data = json.loads(list_sessions_result.stdout)
             sessions = data.get("sessions", [])
 
