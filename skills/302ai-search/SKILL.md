@@ -90,6 +90,9 @@ python3 ~/skills/302ai-search/scripts/302ai-search.py "技术文章" --include-d
 # 学术搜索并分页
 python3 ~/skills/302ai-search/scripts/302ai-search.py "大模型进展" --provider metaso --category scholar --page 1
 
+# 指定时间范围
+python3 ~/skills/302ai-search/scripts/302ai-search.py "今日新闻" --time-range day
+
 # 排除图片
 python3 ~/skills/302ai-search/scripts/302ai-search.py "搜索词" --no-images
 
@@ -99,26 +102,26 @@ python3 ~/skills/302ai-search/scripts/302ai-search.py "搜索词" --json
 
 ### 命令行参数
 
-| 参数                     | 简写 | 说明                                                        | 默认值 |
-| ------------------------ | ---- | ----------------------------------------------------------- | ------ |
-| `query`                  | -    | 搜索关键词（必需）                                          | -      |
-| `--count`                | `-c` | 返回结果数量                                                | 5      |
-| `--provider`             | `-p` | 搜索供应商                                                  | tavily |
-| `--freshness`            | `-f` | 时效性过滤 (time_range)，如 day, week, month, year          | -      |
-| `--category`             | -    | 搜索分类，具体值因供应商而异 (如 general, news, company 等) | -      |
-| `--no-images`            | -    | 排除图片结果                                                | false  |
-| `--include-domains`      | -    | 域名白名单，逗号分隔 (如: `example.com,techblog.com`)       | -      |
-| `--exclude-domains`      | -    | 域名黑名单，逗号分隔 (如: `spam.com,ads.com`)               | -      |
-| `--start-crawl-date`     | -    | `exa` 专用: 爬取起始时间 (ISO8601 格式)                     | -      |
-| `--end-crawl-date`       | -    | `exa` 专用: 爬取结束时间 (ISO8601 格式)                     | -      |
-| `--start-published-date` | -    | `exa` 专用: 发布起始时间 (ISO8601 格式)                     | -      |
-| `--end-published-date`   | -    | `exa` 专用: 发布结束时间 (ISO8601 格式)                     | -      |
-| `--crawl-results`        | -    | `search1_*` 专用: 爬取完整网页内容的数量                    | -      |
-| `--include-row-content`  | -    | `metaso` 专用: 返回页面完整文本内容 (可能产生额外费用)      | -      |
-| `--page`                 | -    | 分页页码 (`metaso`/`unifuncs` 专用，metaso 1 page = 10 条)  | -      |
-| `--max-tokens-per-page`  | -    | `perplexity` 专用: 每页返回的最大 Token 数量                | -      |
-| `--country`              | -    | `perplexity` 专用: 按国家/地区过滤结果                      | -      |
-| `--json`                 | `-j` | 输出原始JSON响应                                            | false  |
+| 参数                        | 简写 | 说明                                                         | 默认值 |
+| ------------------------- | ---- | ------------------------------------------------------------ | ------ |
+| `query`                   | -    | 搜索关键词（必需）                                           | -      |
+| `--count`                 | `-c` | 返回结果数量                                                 | 5      |
+| `--provider`              | `-p` | 搜索供应商                                                   | tavily |
+| `--time-range`            | `-t` | 时间范围 (time_range)，如 day, week, month, year                   | -      |
+| `--category`              | -    | 搜索分类，具体值因供应商而异 (如 general, news, company 等)    | -      |
+| `--no-images`             | -    | 排除图片结果                                                 | false  |
+| `--include-domains`       | -    | 域名白名单，逗号分隔 (如: `example.com,techblog.com`)              | -      |
+| `--exclude-domains`       | -    | 域名黑名单，逗号分隔 (如: `spam.com,ads.com`)                      | -      |
+| `--start-crawl-date`      | -    | `exa` 专用: 爬取起始时间 (ISO8601 格式)                            | -      |
+| `--end-crawl-date`        | -    | `exa` 专用: 爬取结束时间 (ISO8601 格式)                            | -      |
+| `--start-published-date`  | -    | `exa` 专用: 发布起始时间 (ISO8601 格式)                            | -      |
+| `--end-published-date`    | -    | `exa` 专用: 发布结束时间 (ISO8601 格式)                            | -      |
+| `--crawl-results`         | -    | `search1_*` 专用: 爬取完整网页内容的数量                         | -      |
+| `--include-row-content`   | -    | `metaso` 专用: 返回页面完整文本内容 (可能产生额外费用)           | -      |
+| `--page`                  | -    | 分页页码 (`metaso`/`unifuncs` 专用，metaso 1 page = 10 条)         | -      |
+| `--max-tokens-per-page`   | -    | `perplexity` 专用: 每页返回的最大 Token 数量                       | -      |
+| `--country`               | -    | `perplexity` 专用: 按国家/地区过滤结果                             | -      |
+| `--json`                  | `-j` | 输出原始JSON响应                                               | false  |
 
 ## 输出格式
 
@@ -185,19 +188,21 @@ python3 ~/skills/302ai-search/scripts/302ai-search.py "搜索词" --json
 
 ## 支持的供应商及其特定参数
 
-| 供应商       | provider 值      | 分类 (category)                  | 时效性 (time_range)            | 特殊参数说明                                                    |
-| ------------ | ---------------- | -------------------------------- | ------------------------------ | --------------------------------------------------------------- |
-| Tavily       | `tavily`         | `general`, `news`                | `day`, `week`, `month`, `year` | 默认供应商，高质量综合搜索                                      |
-| Search1      | `search1_search` | `google`, `bing` 等              | `day`, `month`, `year`         | 支持 `crawl_results` 爬取全网页                                 |
-| Search1 News | `search1_news`   | 同上                             | 同上                           | 专注于新闻                                                      |
-| Bocha        | `bocha`          | -                                | `oneDay`, `oneWeek` 等         | 中文搜索优化                                                    |
-| Exa          | `exa`            | `company`, `news`, `pdf` 等      | -                              | 使用专用的四个 Date 参数替代                                    |
-| Metaso       | `metaso`         | `webpage`, `scholar`, `video` 等 | -                              | 秘塔搜索. 支持 `page`, `include_row_content`                    |
-| Firecrawl    | `firecrawl`      | -                                | `day`, `hour`, `week` 等       | -                                                               |
-| Perplexity   | `perplexity`     | -                                | -                              | 限制: `max_results` ≤ 20. 支持 `country`, `max_tokens_per_page` |
-| Unifuncs     | `unifuncs`       | -                                | `Day`, `Week`, `Month`, `Year` | 支持 `page` 分页                                                |
+| 供应商         | provider 值      | 分类 (category) | 时间范围 (time_range) | 特殊参数说明 |
+| -------------- | ---------------- | ---------------- | -------------------- | ------------- |
+| Tavily         | `tavily`         | `general`, `news` | `day`, `week`, `month`, `year` | 默认供应商，高质量综合搜索 |
+| Search1        | `search1_search` | `google`, `bing` 等 | `day`, `month`, `year` | 支持 `crawl_results` 爬取全网页 |
+| Search1 News   | `search1_news`   | 同上 | 同上 | 专注于新闻 |
+| Bocha          | `bocha`          | - | `oneDay`, `oneWeek` 等 | 中文搜索优化 |
+| Exa            | `exa`            | `company`, `news`, `pdf` 等 | - | 不支持 time_range，使用专用的四个 Date 参数替代 |
+| Metaso         | `metaso`         | `webpage`, `scholar`, `video` 等 | - | 不支持 time_range。支持 `page`, `include_row_content` |
+| Firecrawl      | `firecrawl`      | - | `day`, `hour`, `week` 等 | - |
+| Perplexity     | `perplexity`     | - | - | 不支持 time_range。限制: `max_results` ≤ 20. 支持 `country`, `max_tokens_per_page` |
+| Unifuncs       | `unifuncs`       | - | `Day`, `Week`, `Month`, `Year` | 支持 `page` 分页 |
 
-_- 其他 Search1 分类: `duckduckgo`, `yahoo`, `youtube`, `x`, `reddit`, `github`, `arxiv`, `wechat`, `bilibili`, `imdb`, `wikipedia`._
+*- 其他 Search1 分类: `duckduckgo`, `yahoo`, `youtube`, `x`, `reddit`, `github`, `arxiv`, `wechat`, `bilibili`, `imdb`, `wikipedia`.*
+
+**注意**：为避免触发 API 报错，脚本内部会自动检查你传递的 `time_range` 是否被该 `provider` 真正支持；如果传递给不支持它的引擎（如 `metaso` 或 `exa`），将会在这边直接抛出异常拦截。
 
 ## API 参考
 
@@ -209,12 +214,12 @@ _- 其他 Search1 分类: `duckduckgo`, `yahoo`, `youtube`, `x`, `reddit`, `gith
 
 ```json
 {
-	"query": "人工智能最新进展",
-	"provider": "tavily",
-	"max_results": 10,
-	"time_range": "week",
-	"category": "news",
-	"include_images": true
+  "query": "人工智能最新进展",
+  "provider": "tavily",
+  "max_results": 10,
+  "time_range": "week",
+  "category": "news",
+  "include_images": true
 }
 ```
 
@@ -224,7 +229,7 @@ _- 其他 Search1 分类: `duckduckgo`, `yahoo`, `youtube`, `x`, `reddit`, `gith
 
 1. **使用具体的关键词**：`"AI 大语言模型 最新进展"` 比 `"AI"` 更有效
 2. **选择合适的供应商与分类**：
-   - 找最近新闻：`--provider tavily --category news --freshness week`
+   - 找最近新闻：`--provider tavily --category news --time-range week`
    - 找公司介绍：`--provider exa --category company`
    - 找学术资源：`--provider metaso --category scholar`
    - 找微信公众号文章：`--provider search1_search --category wechat`
@@ -239,9 +244,9 @@ _- 其他 Search1 分类: `duckduckgo`, `yahoo`, `youtube`, `x`, `reddit`, `gith
 ### 错误处理
 
 脚本会自动处理常见错误：
-
 - API 余额不足
-- 无效的 provider 或尝试为 provider 设定了它不支持的 category
+- 尝试为 provider 传递了不支持的 time_range 或 category 报错
+- 无效的 provider
 - 网络超时
 - 参数验证失败
 

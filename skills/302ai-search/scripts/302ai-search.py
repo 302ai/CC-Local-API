@@ -5,7 +5,7 @@
 Usage:
     302ai-search.py "搜索关键词"
     302ai-search.py "今天的新闻" --count 10 --provider tavily
-    302ai-search.py "AI trends" --freshness week --json
+    302ai-search.py "AI trends" --time-range week --json
     302ai-search.py "AI公司" --provider exa --category company
     302ai-search.py "技术文章" --include-domains example.com,techblog.com
 """
@@ -83,7 +83,7 @@ PROVIDER_TIME_RANGES = {
     "tavily": ["day", "week", "month", "year", "d", "w", "m", "y"],
     "search1_search": ["day", "month", "year"],
     "search1_news": ["day", "month", "year"],
-    "bocha": ["oneDay", "oneWeek", "oneMonth", "oneYear"],
+    "bocha": ["oneDay", "oneWeek", "oneMonth", "oneYear"],  # bocha 也支持日期范围格式，代码中作了宽容处理
     "firecrawl": ["day", "hour", "week", "month", "year"],
     "unifuncs": ["Day", "Week", "Month", "Year"],
 }
@@ -99,7 +99,7 @@ def search(
     api_key: str = None,
     count: int = DEFAULT_COUNT,
     provider: str = DEFAULT_PROVIDER,
-    freshness: Optional[str] = None,
+    time_range: Optional[str] = None,
     include_images: bool = True,
     category: Optional[str] = None,
     include_domains: Optional[List[str]] = None,
@@ -123,7 +123,7 @@ def search(
         api_key: 302.AI API Key，如果不提供则从环境变量获取
         count: 返回结果数量，默认5
         provider: 搜索供应商，默认tavily
-        freshness: 时效性过滤（time_range），具体值因供应商而异
+        time_range: 时间范围，具体值因供应商而异
         include_images: 是否包含图片，默认True
         category: 搜索分类，具体值因供应商而异
         include_domains: 域名白名单列表
@@ -159,6 +159,19 @@ def search(
                 f"支持的分类: {', '.join(valid_categories)}"
             )
 
+    # 验证 time_range 是否在供应商支持范围内，提前拦截错误以防 API 报错
+    if time_range:
+        if provider in PROVIDER_TIME_RANGES:
+            valid_time_ranges = PROVIDER_TIME_RANGES[provider]
+            # bocha supports ranges like YYYY-MM-DD..YYYY-MM-DD which is hard to enum fully
+            if provider != "bocha" and time_range not in valid_time_ranges:
+                raise ValueError(
+                    f"供应商 {provider} 不支持时间范围 '{time_range}'。"
+                    f"支持的时间范围: {', '.join(valid_time_ranges)}"
+                )
+        else:
+            raise ValueError(f"供应商 {provider} 不支持 time_range(时间范围) 参数，请不要传递它。")
+
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -173,8 +186,8 @@ def search(
     }
 
     # 添加可选参数 —— 通用
-    if freshness:
-        payload["time_range"] = freshness
+    if time_range:
+        payload["time_range"] = time_range
 
     if category:
         payload["category"] = category
@@ -279,7 +292,7 @@ def main():
 示例:
   302ai-search "今天的新闻"
   302ai-search "AI trends" --count 10 --provider tavily
-  302ai-search "最新技术" --freshness week
+  302ai-search "最新技术" --time-range week
   302ai-search "AI公司" --provider exa --category company
   302ai-search "技术文章" --include-domains example.com,techblog.com
   302ai-search "学术论文" --provider metaso --category scholar --page 2
@@ -296,8 +309,8 @@ def main():
     parser.add_argument("--provider", "-p", default=DEFAULT_PROVIDER,
                         choices=SUPPORTED_PROVIDERS,
                         help=f"搜索供应商 (默认: {DEFAULT_PROVIDER})")
-    parser.add_argument("--freshness", "-f",
-                        help="时效性过滤 (time_range)，具体值因供应商而异，如: day, week, month, year")
+    parser.add_argument("--time-range", "-t",
+                        help="时间范围 (time_range)，具体值因供应商而异，如: day, week, month, year")
     parser.add_argument("--category",
                         help="搜索分类，具体值因供应商而异 (如 tavily: general/news; exa: company/news/pdf 等)")
     parser.add_argument("--no-images", action="store_true",
@@ -350,7 +363,7 @@ def main():
             query=args.query,
             count=args.count,
             provider=args.provider,
-            freshness=args.freshness,
+            time_range=args.time_range,
             include_images=not args.no_images,
             category=args.category,
             include_domains=parse_list_arg(args.include_domains) if args.include_domains else None,
