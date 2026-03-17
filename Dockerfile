@@ -64,10 +64,8 @@ CMD ["sh", "-c", "\
     mkdir -p /home/user/skills && \
     for p in /app/.skills-backup/*; do \
         name=\"$(basename \"$p\")\"; \
-        if [ ! -e \"/home/user/skills/$name\" ]; then \
-            cp -a \"$p\" /home/user/skills/ 2>/dev/null || true; \
-            echo \"Restored skill entry: $name\"; \
-        fi; \
+        cp -a \"$p\" /home/user/skills/ 2>/dev/null || true; \
+        echo \"Restored skill entry (overwrite): $name\"; \
     done && \
     openclaw gateway run --port 18789 --bind lan & \
     uvicorn main:app --host 0.0.0.0 --port 8000\
