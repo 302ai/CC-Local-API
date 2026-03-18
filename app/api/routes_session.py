@@ -20,7 +20,8 @@ from app.core.config import ROOT_SAVE_PATH
 from app.core.file_content import create_zip_from_directory
 from app.core.log import log_info
 from app.db.session import get_db, run_in_threadpool
-from app.core.oc_ops import oc_new_session_and_list_active, add_my_oc_system_prompt_to_agent_md
+from app.core.oc_ops import oc_new_session_and_list_active, add_my_oc_system_prompt_to_agent_md, \
+    oc_load_sessions_json_as_list
 from app.repositories.session_repo import SessionRepository
 
 
@@ -230,9 +231,11 @@ async def init_project(payload: ProjectInitRequest, repo: SessionRepository = De
 
             if list_sessions_result.exit_code != 0:
                 return fail(list_sessions_result.stderr, status_code=400)
-            log_info(repr(list_sessions_result.stdout))
-            log_info(list_sessions_result.stdout)
-            data = json.loads(list_sessions_result.stdout)
+            try:
+                data = json.loads(list_sessions_result.stdout)
+            except json.decoder.JSONDecodeError:
+                # fix openclaw 3.13 CLI --json没正确返回json格式
+                data = await oc_load_sessions_json_as_list(oc_agent_name=oc_agent_id)
             sessions = data.get("sessions", [])
 
             if not sessions:

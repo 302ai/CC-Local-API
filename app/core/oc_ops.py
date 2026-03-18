@@ -15,6 +15,52 @@ from app.core.http_client import fetch_json_with_retry, fetch_sse_with_retry
 from app.core.log import log_info
 
 
+async def oc_load_sessions_json_as_list(
+    *,
+    oc_agent_name: str,
+    base_dir: Path = Path("/home/user/.openclaw/agents"),
+) -> dict:
+    """从本地 sessions.json 读取并转换成业务需要的 sessions 列表（异步）。
+
+    sessions.json 结构示例：
+      {
+        "agent:<agentName>:<provider>:<uuid>": {
+          "sessionId": "...",
+          "updatedAt": 1773735496715,
+          "key": "...",
+          ...
+        },
+        ...
+      }
+
+    返回结构对齐业务侧：{"sessions": [ {"sessionId":..., "updatedAt":..., "key":...}, ... ]}
+    仅保留 sessionId / updatedAt / key 三个字段，其它丢弃。
+    """
+
+    sessions_path = base_dir / oc_agent_name / "sessions" / "sessions.json"
+    try:
+        from app.core.file_content import read_file_as_text_async
+        sessions_json_str = await read_file_as_text_async(sessions_path)
+        raw = json.loads(sessions_json_str)
+    except Exception:
+        return {"sessions": []}
+
+    if not isinstance(raw, dict):
+        return {"sessions": []}
+
+    sessions: list[dict] = []
+    for key, entry in raw.items():
+        if not isinstance(entry, dict):
+            continue
+        sessions.append({
+            "sessionId": entry.get("sessionId"),
+            "updatedAt": entry.get("updatedAt", 0),
+            "key": key,
+        })
+
+    return {"sessions": sessions}
+
+
 def _oc_extract_agent_name_from_session_key(oc_session_key: str) -> str | None:
     # Expected format: agent:<agentName>:<provider>:<uuid>
     # Example: agent:testoc:openai:90f8496d-3041-4312-93ad-61721b2e32ce
@@ -962,11 +1008,14 @@ This is a starting point. Add your own conventions, style, and rules as you figu
     await write_file_async(Path(f"/home/user/workspace/{workspace_name}/AGENTS.md"), add_prompt)
 
 
+
+
+
 if __name__ == "__main__":
 
     async def main():
 
-        print(await oc_list_exec_session_ids_from_sessions_json(base_dir=Path(r"C:\Users\hjj\Desktop\qiuhui\.openclaw\agents")))
-        print(await oc_session_id_to_openai_messages(oc_agent_name="main", session_id="7e2f5c2b-6644-4278-b2e0-196ecd7bae5e", base_dir=Path(r"C:\Users\hjj\Desktop\qiuhui\.openclaw\agents")))
+        print(await oc_load_sessions_json_as_list(oc_agent_name="main", base_dir=Path(r"C:\Users\hjj\Desktop\qiuhui\.openclaw\agents")))
+        # print(await oc_session_id_to_openai_messages(oc_agent_name="main", session_id="7e2f5c2b-6644-4278-b2e0-196ecd7bae5e", base_dir=Path(r"C:\Users\hjj\Desktop\qiuhui\.openclaw\agents")))
 
     asyncio.run(main())

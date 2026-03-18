@@ -33,7 +33,7 @@ from app.core.file_content import create_zip_from_directory, read_file_as_text_a
 from app.core.file_io import download_file_from_url, write_file_async
 from app.core.log import log_error, log_info, log_warning
 from app.core.oc_ops import oc_new_session_and_list_active, oc_update_session_model, oc_chat_completions_sse, \
-    add_my_oc_system_prompt_to_agent_md
+    add_my_oc_system_prompt_to_agent_md, oc_load_sessions_json_as_list
 from app.db.session import get_db, run_in_threadpool
 from app.repositories.session_repo import SessionRepository
 
@@ -626,7 +626,11 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                     if list_sessions_result.exit_code != 0:
                         raise Exception(list_sessions_result.stderr)
                     log_info(list_sessions_result.stdout)
-                    data = json.loads(list_sessions_result.stdout)
+                    try:
+                        data = json.loads(list_sessions_result.stdout)
+                    except json.decoder.JSONDecodeError:
+                        # fix openclaw 3.13 CLI --json没正确返回json格式
+                        data = await oc_load_sessions_json_as_list(oc_agent_name=oc_agent_id)
                     sessions = data.get("sessions", [])
 
                     if not sessions:
@@ -672,7 +676,11 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                     if list_sessions_result.exit_code != 0:
                         raise Exception(list_sessions_result.stderr)
 
-                    data = json.loads(list_sessions_result.stdout)
+                    try:
+                        data = json.loads(list_sessions_result.stdout)
+                    except json.decoder.JSONDecodeError:
+                        # fix openclaw 3.13 CLI --json没正确返回json格式
+                        data = await oc_load_sessions_json_as_list(oc_agent_name=oc_agent_id)
                     sessions = data.get("sessions", [])
 
                     if not sessions:
