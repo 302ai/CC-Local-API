@@ -174,6 +174,67 @@ EXCLUDE_PATTERNS = {
     "bower_components",
 }
 
+
+check_cmd = r"""find . -maxdepth 4 \
+\( -type d \( \
+    -name ".git" -o \
+    -name "claude" -o \
+    -name "node_modules" -o \
+    -name "venv" -o \
+    -name ".venv" -o \
+    -name "env" -o \
+    -name "__pycache__" \
+\) -prune \) -o \
+-type f ! -name ".git" \( \
+    -name "package.json" -o \
+    -name "pnpm-lock.yaml" -o \
+    -name "yarn.lock" -o \
+    -name "package-lock.json" -o \
+    -name "next.config.*" -o \
+    -name "vite.config.*" -o \
+    -name "vue.config.*" -o \
+    -name "nuxt.config.*" -o \
+    -name "svelte.config.*" -o \
+    -name "astro.config.*" -o \
+    -name "remix.config.*" -o \
+    -name "angular.json" -o \
+    -name "gatsby-config.*" -o \
+    -path "./index.html" -o \
+    -path "*/public/index.html" -o \
+    -path "./server.js" -o \
+    -path "./app.js" -o \
+    -path "./index.js" -o \
+    -path "./main.js" -o \
+    -path "./server.ts" -o \
+    -path "./app.ts" -o \
+    -path "./index.ts" -o \
+    -path "./main.ts" -o \
+    -path "./src/index.js" -o \
+    -path "./src/index.ts" -o \
+    -path "./src/index.jsx" -o \
+    -path "./src/index.tsx" -o \
+    -path "./src/main.js" -o \
+    -path "./src/main.ts" -o \
+    -path "./src/main.jsx" -o \
+    -path "./src/main.tsx" -o \
+    -path "./src/App.vue" -o \
+    -path "./src/app.js" -o \
+    -path "./src/app.ts" -o \
+    -path "./src/app.jsx" -o \
+    -path "./src/app.tsx" -o \
+    -path "./src/server.js" -o \
+    -path "./src/server.ts" -o \
+    \( -path "./src/*" -a \( \
+        -name "*.js" -o \
+        -name "*.ts" -o \
+        -name "*.jsx" -o \
+        -name "*.tsx" -o \
+        -name "*.vue" \
+    \) \) \
+\) -print"""
+
+
+
 class TextContent(BaseModel):
     type: Literal["text"] = Field(default="text", description="内容类型")
     text: str = Field(..., description="文本内容")
@@ -402,7 +463,7 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                 if run_id:
                     await runner.cleanup(run_id)
 
-            check_cmd = """find . -maxdepth 4 \( -path "./claude" -o -path "./claude/*" -o -path "./node_modules" -o -path "./node_modules/*" -o -path "./.git" -o -path "./.git/*" -o -path "./venv" -o -path "./venv/*" -o -path "./.venv" -o -path "./.venv/*" -o -path "./env" -o -path "./env/*" -o -path "./__pycache__" -o -path "./__pycache__/*" \) -prune -o -type f \( -name "package.json" -o -name "pnpm-lock.yaml" -o -name "yarn.lock" -o -name "package-lock.json" -o -name "next.config.*" -o -name "vite.config.*" -o -name "vue.config.*" -o -name "nuxt.config.*" -o -name "svelte.config.*" -o -name "astro.config.*" -o -name "remix.config.*" -o -name "angular.json" -o -name "gatsby-config.*" -o -path "./index.html" -o -path "*/public/index.html" -o -path "./server.js" -o -path "./app.js" -o -path "./index.js" -o -path "./main.js" -o -path "./server.ts" -o -path "./app.ts" -o -path "./index.ts" -o -path "./main.ts" -o -path "./src/index.js" -o -path "./src/index.ts" -o -path "./src/index.jsx" -o -path "./src/index.tsx" -o -path "./src/main.js" -o -path "./src/main.ts" -o -path "./src/main.jsx" -o -path "./src/main.tsx" -o -path "./src/App.vue" -o -path "./src/app.js" -o -path "./src/app.ts" -o -path "./src/app.jsx" -o -path "./src/app.tsx" -o -path "./src/server.js" -o -path "./src/server.ts" -o \( -path "./src/*" -a \( -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" -o -name "*.vue" \) \) \)"""
+            # check_cmd = """find . -maxdepth 4 \( -path "./claude" -o -path "./claude/*" -o -path "./node_modules" -o -path "./node_modules/*" -o -path "./.git" -o -path "./.git/*" -o -path "./venv" -o -path "./venv/*" -o -path "./.venv" -o -path "./.venv/*" -o -path "./env" -o -path "./env/*" -o -path "./__pycache__" -o -path "./__pycache__/*" \) -prune -o -type f \( -name "package.json" -o -name "pnpm-lock.yaml" -o -name "yarn.lock" -o -name "package-lock.json" -o -name "next.config.*" -o -name "vite.config.*" -o -name "vue.config.*" -o -name "nuxt.config.*" -o -name "svelte.config.*" -o -name "astro.config.*" -o -name "remix.config.*" -o -name "angular.json" -o -name "gatsby-config.*" -o -path "./index.html" -o -path "*/public/index.html" -o -path "./server.js" -o -path "./app.js" -o -path "./index.js" -o -path "./main.js" -o -path "./server.ts" -o -path "./app.ts" -o -path "./index.ts" -o -path "./main.ts" -o -path "./src/index.js" -o -path "./src/index.ts" -o -path "./src/index.jsx" -o -path "./src/index.tsx" -o -path "./src/main.js" -o -path "./src/main.ts" -o -path "./src/main.jsx" -o -path "./src/main.tsx" -o -path "./src/App.vue" -o -path "./src/app.js" -o -path "./src/app.ts" -o -path "./src/app.jsx" -o -path "./src/app.tsx" -o -path "./src/server.js" -o -path "./src/server.ts" -o \( -path "./src/*" -a \( -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" -o -name "*.vue" \) \) \)"""
 
             if payload.enable_pre_deploy_check:
 
@@ -725,7 +786,7 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                 # event 是 bytes，需要对应处理
                 if event.strip() == b"data: [DONE]":
 
-                    check_cmd = """find . -maxdepth 4 \( -path "./claude" -o -path "./claude/*" -o -path "./node_modules" -o -path "./node_modules/*" -o -path "./.git" -o -path "./.git/*" -o -path "./venv" -o -path "./venv/*" -o -path "./.venv" -o -path "./.venv/*" -o -path "./env" -o -path "./env/*" -o -path "./__pycache__" -o -path "./__pycache__/*" \) -prune -o -type f \( -name "package.json" -o -name "pnpm-lock.yaml" -o -name "yarn.lock" -o -name "package-lock.json" -o -name "next.config.*" -o -name "vite.config.*" -o -name "vue.config.*" -o -name "nuxt.config.*" -o -name "svelte.config.*" -o -name "astro.config.*" -o -name "remix.config.*" -o -name "angular.json" -o -name "gatsby-config.*" -o -path "./index.html" -o -path "*/public/index.html" -o -path "./server.js" -o -path "./app.js" -o -path "./index.js" -o -path "./main.js" -o -path "./server.ts" -o -path "./app.ts" -o -path "./index.ts" -o -path "./main.ts" -o -path "./src/index.js" -o -path "./src/index.ts" -o -path "./src/index.jsx" -o -path "./src/index.tsx" -o -path "./src/main.js" -o -path "./src/main.ts" -o -path "./src/main.jsx" -o -path "./src/main.tsx" -o -path "./src/App.vue" -o -path "./src/app.js" -o -path "./src/app.ts" -o -path "./src/app.jsx" -o -path "./src/app.tsx" -o -path "./src/server.js" -o -path "./src/server.ts" -o \( -path "./src/*" -a \( -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" -o -name "*.vue" \) \) \)"""
+                    # check_cmd = """find . -maxdepth 4 \( -path "./claude" -o -path "./claude/*" -o -path "./node_modules" -o -path "./node_modules/*" -o -path "./.git" -o -path "./.git/*" -o -path "./venv" -o -path "./venv/*" -o -path "./.venv" -o -path "./.venv/*" -o -path "./env" -o -path "./env/*" -o -path "./__pycache__" -o -path "./__pycache__/*" \) -prune -o -type f \( -name "package.json" -o -name "pnpm-lock.yaml" -o -name "yarn.lock" -o -name "package-lock.json" -o -name "next.config.*" -o -name "vite.config.*" -o -name "vue.config.*" -o -name "nuxt.config.*" -o -name "svelte.config.*" -o -name "astro.config.*" -o -name "remix.config.*" -o -name "angular.json" -o -name "gatsby-config.*" -o -path "./index.html" -o -path "*/public/index.html" -o -path "./server.js" -o -path "./app.js" -o -path "./index.js" -o -path "./main.js" -o -path "./server.ts" -o -path "./app.ts" -o -path "./index.ts" -o -path "./main.ts" -o -path "./src/index.js" -o -path "./src/index.ts" -o -path "./src/index.jsx" -o -path "./src/index.tsx" -o -path "./src/main.js" -o -path "./src/main.ts" -o -path "./src/main.jsx" -o -path "./src/main.tsx" -o -path "./src/App.vue" -o -path "./src/app.js" -o -path "./src/app.ts" -o -path "./src/app.jsx" -o -path "./src/app.tsx" -o -path "./src/server.js" -o -path "./src/server.ts" -o \( -path "./src/*" -a \( -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" -o -name "*.vue" \) \) \)"""
 
                     if payload.enable_pre_deploy_check:
 
