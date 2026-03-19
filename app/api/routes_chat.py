@@ -842,7 +842,7 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
 
                 prefix_parts.append(f"当前工作目录：{workspace_path}")
                 prefix_parts.append(f"附件目录：{workspace_path}/.302ai/attachments")
-                prefix_parts.append(f"如果是编程相关任务，请先阅读 {workspace_path}/CLAUDE.md（里面有我的开发习惯）")
+                prefix_parts.append(f"如果是编程相关任务，请先阅读 {workspace_path}/CLAUDE.md（里面有我的开发习惯），实现代码需要通过claude code CLI生成， 而且你必须确保是在当前工作目录调用claude code的CLI，代码文件必须保存在工作目录")
 
                 prefix = "\n\n".join(prefix_parts) + "\n\n"
                 final_user_prompt = prefix + user_prompt
