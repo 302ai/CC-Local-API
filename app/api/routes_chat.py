@@ -369,17 +369,48 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                         log_warning("追加失败")
             # 判断是否是plan模式
             is_plan = True if payload.action == "plan" else False
-            final_user_prompt = user_prompt + " " + ",".join(file_paths) + " ,当前的工作目录是：" + workspace_path + f" ,附件目录是： {workspace_path}/.302ai/attachments"
-            if payload.available_skills:
-                skill_prompt_prefix = "**Note**:  忽略之前提及的skills存储位置， 你使用的skills以接下来我告诉你的路径为准"
-                for skill in payload.available_skills:
-                    find_skill_path = await run_in_threadpool(
-                        lambda: _find_folder_upto_depth2("/home/user/.claude/skills", skill)
+
+            if user_prompt.lstrip().startswith("/"):
+                final_user_prompt = user_prompt
+            else:
+                available_skill_lines: list[str] = []
+                if payload.available_skills:
+                    for skill in payload.available_skills:
+                        p = _find_skill_dir_depth0(skill)
+                        if p:
+                            available_skill_lines.append(f"- {skill}: {p}")
+                        else:
+                            available_skill_lines.append(f"- {skill}")
+
+                force_skill_lines: list[str] = []
+                if payload.force_skills:
+                    for skill in payload.force_skills:
+                        p = _find_skill_dir_depth0(skill)
+                        if p:
+                            force_skill_lines.append(f"- {skill}: {p} (请先阅读 {p}/SKILL.md)")
+                        else:
+                            force_skill_lines.append(f"- {skill} (找不到路径；请至少按名称尝试使用，并优先阅读其 SKILL.md)")
+
+                prefix_parts: list[str] = []
+
+                if force_skill_lines:
+                    prefix_parts.append(
+                        "强制/优先 Skills（执行任务前必须先阅读对应 SKILL.md）：\n"
+                        + "\n".join(force_skill_lines)
                     )
-                    if find_skill_path:
-                        final_user_prompt += f"\n {skill_prompt_prefix}{skill} skill数据存放在： {','.join(find_skill_path)}"
-                        skill_prompt_prefix = ""
-            log_info(final_user_prompt)
+
+                if available_skill_lines:
+                    prefix_parts.append("可用 Skills（本地对话可选用）：\n" + "\n".join(available_skill_lines))
+
+                if file_paths:
+                    prefix_parts.append("附件文件：\n" + "\n".join(f"- {p}" for p in file_paths))
+
+                prefix_parts.append(f"当前工作目录：{workspace_path}")
+                prefix_parts.append(f"附件目录：{workspace_path}/.302ai/attachments")
+                prefix_parts.append(f"如果是编程相关任务，请先阅读 {workspace_path}/CLAUDE.md（里面有我的开发习惯）")
+
+                prefix = "\n\n".join(prefix_parts) + "\n\n"
+                final_user_prompt = prefix + user_prompt
             claude_code_cmd = await run_in_threadpool(
                 lambda: _build_claude_command(
                     final_user_prompt,
