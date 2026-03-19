@@ -28,7 +28,7 @@ from app.api.routes_session import claw_lock
 from app.core.ai302.deploy_ops import create_302ai_deploy_task, get_302ai_deploy_task_info
 from app.core.command_parser import parse_command_from_message, CommandType
 from app.core.command_runner import CommandRunner
-from app.core.config import ROOT_SAVE_PATH, settings
+from app.core.config import ROOT_SAVE_PATH, settings, CLAUDE_SKILLS_DIR, OPENCLAW_SKILLS_DIR
 from app.core.file_content import create_zip_from_directory, read_file_as_text_async
 from app.core.file_io import download_file_from_url, write_file_async
 from app.core.log import log_error, log_info, log_warning
@@ -260,6 +260,7 @@ class ClaudeChatCompletionRequest(BaseModel):
     structured_output: bool = Field(False, description="是否以CC原始结构输出")
     enable_pre_deploy_check: bool = Field(False, description="是否开启部署前检测 需要开启structured_output使用")
     available_skills: List[str] = Field([], description="对话选择开启的skills")
+    force_skills: List[str] = Field([], description="希望尽可能使用的skills（执行前请先阅读其SKILL.md）")
     action: str = Field("", description="特殊操作指令")
     agent_type: int = Field(0, description="智能体类型， 0=claude code；1=openclaw")
 
@@ -776,8 +777,44 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
             if user_prompt.lstrip().startswith("/"):
                 final_user_prompt = user_prompt
             else:
-                final_user_prompt = user_prompt  + " " + ",".join(
-                    file_paths) + " ,当前的工作目录是：" + workspace_path + f" ,附件目录是： {workspace_path}/.302ai/attachments" + f" ,如果是编程相关任务，请先阅读{workspace_path}/CLAUDE.md，里面有我的开发习惯"
+                available_skill_lines: list[str] = []
+                if payload.available_skills:
+                    for skill in payload.available_skills:
+                        p = _find_skill_dir_depth0(skill)
+                        if p:
+                            available_skill_lines.append(f"- {skill}: {p}")
+                        else:
+                            available_skill_lines.append(f"- {skill}")
+
+                force_skill_lines: list[str] = []
+                if payload.force_skills:
+                    for skill in payload.force_skills:
+                        p = _find_skill_dir_depth0(skill)
+                        if p:
+                            force_skill_lines.append(f"- {skill}: {p} (请先阅读 {p}/SKILL.md)")
+                        else:
+                            force_skill_lines.append(f"- {skill} (找不到路径；请至少按名称尝试使用，并优先阅读其 SKILL.md)")
+
+                prefix_parts: list[str] = []
+
+                if force_skill_lines:
+                    prefix_parts.append(
+                        "强制/优先 Skills（执行任务前必须先阅读对应 SKILL.md）：\n"
+                        + "\n".join(force_skill_lines)
+                    )
+
+                if available_skill_lines:
+                    prefix_parts.append("可用 Skills（本地对话可选用）：\n" + "\n".join(available_skill_lines))
+
+                if file_paths:
+                    prefix_parts.append("附件文件：\n" + "\n".join(f"- {p}" for p in file_paths))
+
+                prefix_parts.append(f"当前工作目录：{workspace_path}")
+                prefix_parts.append(f"附件目录：{workspace_path}/.302ai/attachments")
+                prefix_parts.append(f"如果是编程相关任务，请先阅读 {workspace_path}/CLAUDE.md（里面有我的开发习惯）")
+
+                prefix = "\n\n".join(prefix_parts) + "\n\n"
+                final_user_prompt = prefix + user_prompt
             async for event in oc_chat_completions_sse(
                     oc_session_key=oc_session_key,
                     user_prompt=final_user_prompt,
@@ -1308,6 +1345,19 @@ def _find_folder_upto_depth2(root_dir: Union[str, Path], target_name: str) -> Li
                 results.append(str(d2.resolve()))
 
     return results
+
+
+def _find_skill_dir_depth0(target_name: str) -> Optional[str]:
+    """在 CLAUDE_SKILLS_DIR / OPENCLAW_SKILLS_DIR 下查找同名文件夹（仅深度0），命中即返回路径。"""
+    if not target_name:
+        return None
+
+    for root in (CLAUDE_SKILLS_DIR, OPENCLAW_SKILLS_DIR):
+        p = Path(root) / target_name
+        if p.is_dir():
+            return str(p.resolve())
+
+    return None
 
 
 def _generate_qa_batch_content(
