@@ -2,10 +2,10 @@ name: Publish Docker image
 
 on:
   push:
-    branches: ["main", "dev", "oc"]
+    branches: ["main", "dev", "oc", "test"]
     tags: ["v*.*.*"]
   pull_request:
-    branches: ["main", "dev", "oc"]
+    branches: ["main", "dev", "oc", "test"]
 
 env:
   REGISTRY: ghcr.io
