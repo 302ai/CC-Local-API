@@ -1,6 +1,6 @@
 ---
 name: 302ai-search
-description: 使用 302.AI 通用搜索 API 进行网络搜索。当需要获取实时信息、新闻、网页内容时使用，支持多种搜索引擎供应商（如 tavily、exa、metaso 等）。需要配置 AI302_API_KEY。
+description: Use the 302.AI Universal Search API for web searches. It is used when you need to get real-time information, news, web content, and supports a variety of search engine providers (such as Tavily, Exa, Metaso, etc.). Configuration AI302_API_KEY is required.
 metadata:
   { "openclaw": { "primaryEnv": "AI302_API_KEY", "requires": { "env": ["AI302_API_KEY"] } } }
 ---

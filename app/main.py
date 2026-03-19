@@ -11,7 +11,6 @@ import aiohttp
 from fastapi import FastAPI
 
 from app.api.routes import cc_router, sandbox_router, chat_base_router, oc_base_router
-from app.core.common import short_hash
 from app.core.config import ROOT_SAVE_PATH
 from app.core.config import settings
 from app.core.git_ops import validate_and_normalize_github_url
@@ -21,7 +20,7 @@ from app.models.base import bind_models, auto_migrate_add_missing_columns, detec
 from app.models.skill import Skill
 from app.models.session import Session
 from app.models.job_session_agent import JobSessionAgent
-from app.models.job_sync_log import JobSyncLog
+from app.models.skill_desc_zh_cache import SkillDescZhCache
 
 
 
@@ -29,9 +28,9 @@ from app.models.job_sync_log import JobSyncLog
 async def lifespan(app: FastAPI):
     app.state.db = db_state_default()
 
-    bind_models(app.state.db.database, [Skill, Session, JobSessionAgent])
+    bind_models(app.state.db.database, [Skill, Session, JobSessionAgent, SkillDescZhCache])
 
-    models = [Skill, Session, JobSessionAgent]
+    models = [Skill, Session, JobSessionAgent, SkillDescZhCache]
 
     # Detect whether migration is needed. If needed, backup first, then migrate.
     missing_cols = detect_missing_columns(app.state.db.database, models)
@@ -53,6 +52,31 @@ async def lifespan(app: FastAPI):
 
     async def _load_official_skills_once():
         github_url = "https://github.com/anthropics/skills.git"
+        version_path = Path("/home/user/.skill_sync_version.json")
+
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        should_sync = True
+
+        try:
+            raw = version_path.read_text(encoding="utf-8")
+            import json
+            payload = json.loads(raw)
+            last = payload.get("last_sync_date") if isinstance(payload, dict) else None
+            if isinstance(last, str) and last:
+                try:
+                    last_dt = datetime.datetime.fromisoformat(last.replace("Z", "+00:00"))
+                    if (now_utc - last_dt).days < 15:
+                        should_sync = False
+                except Exception:
+                    should_sync = True
+        except FileNotFoundError:
+            should_sync = True
+        except Exception:
+            should_sync = True
+
+        if not should_sync:
+            log_info("Official skills sync skipped (within 15 days).", version_path=str(version_path))
+            return
 
         try:
             repo_url, _, _ = validate_and_normalize_github_url(github_url)
@@ -64,26 +88,10 @@ async def lifespan(app: FastAPI):
             )
             return
 
-        # If the repo hash directory already exists, skip initialization.
-        repo_url_hash = short_hash(repo_url)
-        repo_dir = Path(ROOT_SAVE_PATH) / ".claude/skills" / repo_url_hash
-        if repo_dir.exists():
-            log_info(
-                "Official skills already initialized; skip.",
-                github_url=github_url,
-                repo_url=repo_url,
-                repo_url_hash=repo_url_hash,
-                repo_dir=str(repo_dir),
-                root_save_path=str(ROOT_SAVE_PATH),
-            )
-            return
-
         log_info(
             "Scheduling official skills initialization.",
             github_url=github_url,
             repo_url=repo_url,
-            repo_url_hash=repo_url_hash,
-            repo_dir=str(repo_dir),
             root_save_path=str(ROOT_SAVE_PATH),
         )
 
@@ -102,6 +110,16 @@ async def lifespan(app: FastAPI):
                         repo_url=repo_url,
                         status=resp.status,
                     )
+
+                    if resp.status < 400:
+                        import json
+                        version_path.write_text(
+                            json.dumps(
+                                {"last_sync_date": now_utc.isoformat().replace("+00:00", "Z")},
+                                ensure_ascii=False,
+                            ),
+                            encoding="utf-8",
+                        )
         except Exception as e:
             # Best-effort: startup should not fail if skill loading fails.
             log_info(

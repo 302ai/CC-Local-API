@@ -24,10 +24,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN groupadd -r user && useradd -r -g user -m -s /bin/bash user
 
 # 创建目录并设置权限
-RUN mkdir -p /data /data/user /app /home/user/.claude /home/user/.openclaw /home/user/db /home/user/skills && \
+RUN mkdir -p /data /data/user /app /home/user/.claude/skills /home/user/.openclaw /home/user/db && \
     chown -R user:user /data /app /home/user && \
     chmod 755 /data /app /home/user && \
-    chmod 775 /home/user/db /home/user/.claude /home/user/.openclaw /home/user/skills
+    chmod 775 /home/user/db /home/user/.claude /home/user/.claude/skills /home/user/.openclaw
 
 # 安装 Python 依赖
 WORKDIR /app
@@ -61,10 +61,10 @@ CMD ["sh", "-c", "\
     else \
         echo 'channels plugin exists, skipping restore'; \
     fi && \
-    mkdir -p /home/user/skills && \
+    mkdir -p /home/user/.claude/skills && \
     for p in /app/.skills-backup/*; do \
         name=\"$(basename \"$p\")\"; \
-        cp -a \"$p\" /home/user/skills/ 2>/dev/null || true; \
+        cp -a \"$p\" /home/user/.claude/skills/ 2>/dev/null || true; \
         echo \"Restored skill entry (overwrite): $name\"; \
     done && \
     openclaw gateway run --port 18789 --bind lan & \

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -27,3 +28,7 @@ MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
 
 # 保存数据的根目录
 ROOT_SAVE_PATH = settings.ROOT_SAVE_PATH
+
+# Skills directories
+CLAUDE_SKILLS_DIR = Path(ROOT_SAVE_PATH) / ".claude/skills"
+OPENCLAW_SKILLS_DIR = Path(ROOT_SAVE_PATH) / ".openclaw/skills"
