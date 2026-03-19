@@ -12,8 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && npm install -g @anthropic-ai/claude-code@latest \
-    && npm install -g openclaw@latest \
-    && npm install -g clawhub@2026.3.2 \
+    && npm install -g openclaw@2026.3.2 \
+    && npm install -g clawhub@latest \
     && npm install -g @playwright/cli@latest \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
