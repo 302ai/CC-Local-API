@@ -69,6 +69,6 @@ CMD ["sh", "-c", "\
   echo \"Restored skill entry (overwrite): $name\"; \
   done && \
   chmod -R 755 /home/user/ && chmod -R 755 /app && chown -R user:user /home/user && \
-  su - user -c 'openclaw gateway run --port 18789 --bind lan & \
+  su - user -c 'cd /app && openclaw gateway run --port 18789 --bind lan & \
   uvicorn main:app --host 0.0.0.0 --port 8000' \
   "]
