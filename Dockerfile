@@ -2,23 +2,23 @@ FROM python:3.12-slim
 
 # 合并所有 apt 操作到一个 RUN，并清理缓存
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libmagic1 \
-    git \
-    sudo \
-    curl \
-    gnupg \
-    zip \
-    ca-certificates \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g @anthropic-ai/claude-code@latest \
-    && npm install -g openclaw@latest \
-    && npm install -g clawhub@latest \
-    && npm install -g @playwright/cli@latest \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* \
-    && rm -rf /root/.npm \
-    && rm -rf /tmp/*
+  libmagic1 \
+  git \
+  sudo \
+  curl \
+  gnupg \
+  zip \
+  ca-certificates \
+  && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+  && apt-get install -y --no-install-recommends nodejs \
+  && npm install -g @anthropic-ai/claude-code@latest \
+  && npm install -g openclaw@latest \
+  && npm install -g clawhub@latest \
+  && npm install -g @playwright/cli@latest \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/* \
+  && rm -rf /root/.npm \
+  && rm -rf /tmp/*
 
 # 创建用户
 RUN groupadd -r user && useradd -r -g user -m -s /bin/bash user
@@ -57,6 +57,7 @@ ENTRYPOINT ["sh", "-lc", "\
 ", "--"]
 
 # 启动时检查 channels 插件是否存在，不存在才恢复
+USER root
 CMD ["sh", "-c", "\
     set -e && \
     echo 'BOOT: cmd start' && \
