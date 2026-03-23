@@ -57,7 +57,6 @@ ENTRYPOINT ["sh", "-lc", "\
 ", "--"]
 
 # 启动时检查 channels 插件是否存在，不存在才恢复
-USER root
 CMD ["sh", "-c", "\
     set -e && \
     echo 'BOOT: cmd start' && \
