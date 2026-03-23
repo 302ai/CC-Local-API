@@ -31,7 +31,7 @@ RUN mkdir -p /data /data/user /app /home/user/.claude/skills /home/user/.opencla
 
 # 安装 Python 依赖
 WORKDIR /app
-COPY --chown=user:user requirements.txt ./
+COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制代码
