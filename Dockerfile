@@ -27,7 +27,9 @@ RUN groupadd -r user && useradd -r -g user -m -s /bin/bash user
 RUN mkdir -p /data /data/user /app /home/user/.claude/skills /home/user/.openclaw /home/user/db && \
     chown -R user:user /data /app /home/user && \
     chmod 755 /data /app /home/user && \
-    chmod 775 /home/user/db /home/user/.claude /home/user/.claude/skills /home/user/.openclaw
+    chmod 775 /home/user/db /home/user/.claude /home/user/.claude/skills && \
+    chmod -R 755 /home/user/.openclaw
+
 
 # 安装 Python 依赖
 WORKDIR /app
@@ -35,7 +37,6 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制代码
-USER user
 COPY --chown=user:user . /app
 
 # 复制自定义 skills 到不会被挂载覆盖的目录
@@ -43,23 +44,40 @@ COPY --chown=user:user skills/ /app/.skills-backup/
 
 ENV HOME=/home/user
 
-# 安装插件
-RUN openclaw plugins install @openclaw-china/channels
-
-# 把插件数据备份到不会被挂载覆盖的目录
-RUN mkdir -p /app/.openclaw-extensions-backup && \
-    cp -a /home/user/.openclaw/extensions /app/.openclaw-extensions-backup/
-
 EXPOSE 8000 18789
+
+# 启动时尝试修复挂载目录权限（bind mount 场景可能无效），然后降权运行主命令
+ENTRYPOINT ["sh", "-lc", "\
+    set -e && \
+    echo 'BOOT: entrypoint start' && \
+    mkdir -p /home/user/.openclaw && \
+    chmod -R 755 /home/user/.openclaw 2>/dev/null || true && \
+    chown -R user:user /home/user/.openclaw 2>/dev/null || true && \
+    exec su -s /bin/sh -c \"$*\" user --\
+", "--"]
 
 # 启动时检查 channels 插件是否存在，不存在才恢复
 CMD ["sh", "-c", "\
-    if [ ! -d \"/home/user/.openclaw/extensions/channels\" ]; then \
-        mkdir -p /home/user/.openclaw/extensions && \
-        cp -a /app/.openclaw-extensions-backup/extensions/* /home/user/.openclaw/extensions/ 2>/dev/null || true; \
-        echo 'Restored openclaw extensions (channels plugin was missing)'; \
+    set -e && \
+    echo 'BOOT: cmd start' && \
+    OPENCLAW_CFG=\"/home/user/.openclaw/openclaw.json\" && \
+    OPENCLAW_CFG_BAK=\"/home/user/.openclaw/openclaw.json.back302ai\" && \
+    CHANNELS_DIR=\"/home/user/.openclaw/extensions/channels\" && \
+    if [ -d \"$CHANNELS_DIR\" ]; then \
+        echo 'channels plugin exists, skipping install'; \
     else \
-        echo 'channels plugin exists, skipping restore'; \
+        if [ -f \"$OPENCLAW_CFG\" ]; then \
+            mkdir -p /home/user/.openclaw && \
+            rm -f \"$OPENCLAW_CFG_BAK\" && \
+            mv \"$OPENCLAW_CFG\" \"$OPENCLAW_CFG_BAK\" && \
+            echo 'Temporarily moved openclaw.json to .back302ai for plugin install'; \
+        fi && \
+        openclaw plugins install @openclaw-china/channels && \
+        echo 'Installed openclaw channels plugin' && \
+        if [ -f \"$OPENCLAW_CFG_BAK\" ]; then \
+            mv -f \"$OPENCLAW_CFG_BAK\" \"$OPENCLAW_CFG\" && \
+            echo 'Restored openclaw.json'; \
+        fi; \
     fi && \
     mkdir -p /home/user/.claude/skills && \
     for p in /app/.skills-backup/*; do \
