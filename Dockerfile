@@ -50,9 +50,11 @@ EXPOSE 8000 18789
 ENTRYPOINT ["sh", "-lc", "\
     set -e && \
     echo 'BOOT: entrypoint start' && \
-    mkdir -p /home/user/.openclaw && \
+    mkdir -p /home/user/.openclaw /home/user/db && \
     chmod -R 755 /home/user/.openclaw 2>/dev/null || true && \
     chown -R user:user /home/user/.openclaw 2>/dev/null || true && \
+    chown -R user:user /home/user/db 2>/dev/null || true && \
+    chmod 755 /home/user/db 2>/dev/null || true && \
     exec su -s /bin/sh -c \"$*\" user --\
 ", "--"]
 
