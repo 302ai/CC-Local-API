@@ -22,7 +22,8 @@ from app.api.response import fail, ok
 from app.core.common import short_hash
 from app.core.command_runner import CommandRunner
 from app.core.config import MAX_FILE_SIZE, CLAUDE_SKILLS_DIR, OPENCLAW_SKILLS_DIR
-from app.core.file_content import extract_zip_file, read_file_as_text_async, create_zip_from_directory
+from app.core.file_content import extract_zip_file, read_file_as_text_async, create_zip_from_directory, \
+    extract_and_parse_json
 from app.core.file_io import download_file_from_url, write_file_async, sync_copy_dir_contents
 from app.core.git_ops import validate_and_normalize_github_url, clone_github_repo
 from app.core.log import log_error
@@ -254,7 +255,13 @@ async def skill_list(
             elif isinstance(loaded, list):
                 oc_skills = [x for x in loaded if isinstance(x, dict)]
         except Exception:
-            oc_skills = []
+            loaded = extract_and_parse_json(oc_result.stdout)
+            # openclaw skills list --json 输出为 { ..., "skills": [...] }
+            if isinstance(loaded, dict) and isinstance(loaded.get("skills"), list):
+                oc_skills = [x for x in loaded["skills"] if isinstance(x, dict)]
+            # 兼容旧格式：直接返回 list
+            elif isinstance(loaded, list):
+                oc_skills = [x for x in loaded if isinstance(x, dict)]
 
     total = len(oc_skills)
     total_pages = math.ceil(total / limit) if limit > 0 else 0
