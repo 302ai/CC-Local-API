@@ -20,14 +20,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /root/.npm \
   && rm -rf /tmp/*
 
-# 创建用户
-RUN groupadd -r user && useradd -r -g user -m -s /bin/bash user
-
 # 创建目录并设置权限
-RUN mkdir -p /data /data/user /app /home/user/.claude/skills /home/user/.openclaw /home/user/db && \
-  chown -R user:user /data /app /home/user && \
-  chmod 755 /data /app /home/user && \
-  chmod 775 /home/user/db /home/user/.claude /home/user/.claude/skills /home/user/.openclaw
+RUN mkdir -p /data /app /home/user/.claude/skills /home/user/.openclaw /home/user/db && \
+  chmod 755 /home/user/.openclaw /home/user/.claude /home/user/.claude/skills && \
+  chmod 755 /data /app /home/user
 
 # 安装 Python 依赖
 WORKDIR /app
@@ -35,38 +31,25 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制代码
-USER user
-COPY --chown=user:user . /app
+COPY . /app
 
 # 复制自定义 skills 到不会被挂载覆盖的目录
-COPY --chown=user:user skills/ /app/.skills-backup/
+COPY skills/ /app/.skills-backup/
 
 ENV HOME=/home/user
 
 # 安装插件
-RUN openclaw plugins install @openclaw-china/channels
+RUN openclaw plugins install @openclaw-china/channels@2026.3.10
+RUN #npx -y @tencent-weixin/openclaw-weixin-cli@latest install
 
 # 把插件数据备份到不会被挂载覆盖的目录
 RUN mkdir -p /app/.openclaw-extensions-backup && \
-  cp -r /home/user/.openclaw/extensions /app/.openclaw-extensions-backup/
+  cp -a /home/user/.openclaw/extensions /app/.openclaw-extensions-backup/
+
+# 复制启动脚本
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 8000 18789
 
-# 启动时检查 channels 插件是否存在，不存在才恢复
-CMD ["sh", "-c", "\
-  if [ ! -d \"/home/user/.openclaw/extensions/channels\" ]; then \
-  mkdir -p /home/user/.openclaw/extensions && \
-  cp -r /app/.openclaw-extensions-backup/extensions/* /home/user/.openclaw/extensions/ 2>/dev/null || true; \
-  echo 'Restored openclaw extensions (channels plugin was missing)'; \
-  else \
-  echo 'channels plugin exists, skipping restore'; \
-  fi && \
-  mkdir -p /home/user/.claude/skills && \
-  for p in /app/.skills-backup/*; do \
-  name=\"$(basename \"$p\")\"; \
-  cp -r \"$p\" /home/user/.claude/skills/ 2>/dev/null || true; \
-  echo \"Restored skill entry (overwrite): $name\"; \
-  done && \
-  openclaw gateway run --port 18789 --bind lan & \
-  uvicorn main:app --host 0.0.0.0 --port 8000\
-  "]
+CMD ["/app/entrypoint.sh"]
