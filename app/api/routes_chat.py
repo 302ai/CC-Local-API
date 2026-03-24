@@ -846,6 +846,9 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
 
                 prefix = "\n\n".join(prefix_parts) + "\n\n"
                 final_user_prompt = prefix + user_prompt
+            collected_text_chunks: list[str] = []
+            file_regex = re.compile(r"^- `?(\/[\S`]+)`?", re.MULTILINE)
+
             async for event in oc_chat_completions_sse(
                     oc_session_key=oc_session_key,
                     user_prompt=final_user_prompt,
@@ -853,32 +856,51 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
             ):
                 # event 是 bytes，需要对应处理
                 if event.strip() == b"data: [DONE]":
-
-                    # check_cmd = """find . -maxdepth 4 \( -path "./claude" -o -path "./claude/*" -o -path "./node_modules" -o -path "./node_modules/*" -o -path "./.git" -o -path "./.git/*" -o -path "./venv" -o -path "./venv/*" -o -path "./.venv" -o -path "./.venv/*" -o -path "./env" -o -path "./env/*" -o -path "./__pycache__" -o -path "./__pycache__/*" \) -prune -o -type f \( -name "package.json" -o -name "pnpm-lock.yaml" -o -name "yarn.lock" -o -name "package-lock.json" -o -name "next.config.*" -o -name "vite.config.*" -o -name "vue.config.*" -o -name "nuxt.config.*" -o -name "svelte.config.*" -o -name "astro.config.*" -o -name "remix.config.*" -o -name "angular.json" -o -name "gatsby-config.*" -o -path "./index.html" -o -path "*/public/index.html" -o -path "./server.js" -o -path "./app.js" -o -path "./index.js" -o -path "./main.js" -o -path "./server.ts" -o -path "./app.ts" -o -path "./index.ts" -o -path "./main.ts" -o -path "./src/index.js" -o -path "./src/index.ts" -o -path "./src/index.jsx" -o -path "./src/index.tsx" -o -path "./src/main.js" -o -path "./src/main.ts" -o -path "./src/main.jsx" -o -path "./src/main.tsx" -o -path "./src/App.vue" -o -path "./src/app.js" -o -path "./src/app.ts" -o -path "./src/app.jsx" -o -path "./src/app.tsx" -o -path "./src/server.js" -o -path "./src/server.ts" -o \( -path "./src/*" -a \( -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" -o -name "*.vue" \) \) \)"""
+                    # 在 DONE 时，从之前累计的文本块里提取路径并插入一个额外 chunk
+                    combined = "".join(collected_text_chunks)
+                    matches = file_regex.findall(combined)
+                    if matches:
+                        deploy_check_info = json.dumps({
+                            "type": "result",
+                            "is_error": False,
+                            "result": "\n".join(f"-`{m}`"for m in matches),
+                        }, ensure_ascii=False)
+                        chunk = gpt_stream_chunk(deploy_check_info)
+                        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
 
                     if payload.enable_pre_deploy_check:
-
                         pre_deploy_check_result = await runner.exec_json(command=check_cmd, cwd=workspace_path)
                         if pre_deploy_check_result.exit_code == 0:
-                            if pre_deploy_check_result.stdout:
-                                deploy_check_info = json.dumps({
-                                    "type": "pre_deploy_check",
-                                    "success": True,
-                                    "find_file": pre_deploy_check_result.stdout,
-                                })
-                            else:
-                                deploy_check_info = json.dumps({
-                                    "type": "pre_deploy_check",
-                                    "success": False,
-                                    "find_file": pre_deploy_check_result.stdout,
-                                })
+                            deploy_check_info = json.dumps({
+                                "type": "pre_deploy_check",
+                                "success": bool(pre_deploy_check_result.stdout),
+                                "find_file": pre_deploy_check_result.stdout,
+                            }, ensure_ascii=False)
 
                             # 插入自定义文本 chunk
-                            chunk = gpt_stream_chunk(f"{json.dumps(deploy_check_info, ensure_ascii=False)}")
+                            chunk = gpt_stream_chunk(deploy_check_info)
                             yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
+
                     # 放行 [DONE]
                     yield event
                 else:
+                    # 非 DONE：透传，同时尽量从 OpenAI chunk 中抽取文本累计
+                    try:
+                        line = event.decode("utf-8", errors="ignore").strip()
+                        if line.startswith("data: "):
+                            payload_json = line[6:]
+                            if payload_json and payload_json != "[DONE]":
+                                obj = json.loads(payload_json)
+                                content = (
+                                    obj.get("choices", [{}])[0]
+                                    .get("delta", {})
+                                    .get("content")
+                                )
+                                if isinstance(content, str) and content:
+                                    collected_text_chunks.append(content)
+                    except Exception:
+                        pass
+
                     yield event
 
         # 处理messages
