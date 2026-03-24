@@ -323,7 +323,7 @@ async def skill_list(
                     "description_zh": zh_by_md5.get(_md5_16(s.get("description")))
                     if isinstance(s.get("description"), str) and s.get("description")
                     else "",
-                    "source": (s.get("source") or "") if isinstance(s.get("source"), str) else "",
+                    "source":"openclaw-bundled" if (isinstance(s.get("name"), str) and s.get("name") == "302ai-search") else ((s.get("source") or "") if isinstance(s.get("source"), str) else ""),
                     "eligible": bool(s.get("eligible")) if "eligible" in s else None,
                     "disabled": bool(s.get("disabled")) if "disabled" in s else None,
                     "bundled": bool(s.get("bundled")) if "bundled" in s else None,
