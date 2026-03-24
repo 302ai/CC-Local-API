@@ -48,7 +48,7 @@ RUN openclaw plugins install @openclaw-china/channels
 
 # 把插件数据备份到不会被挂载覆盖的目录
 RUN mkdir -p /app/.openclaw-extensions-backup && \
-  cp -a /home/user/.openclaw/extensions /app/.openclaw-extensions-backup/
+  cp -r /home/user/.openclaw/extensions /app/.openclaw-extensions-backup/
 
 EXPOSE 8000 18789
 
@@ -56,7 +56,7 @@ EXPOSE 8000 18789
 CMD ["sh", "-c", "\
   if [ ! -d \"/home/user/.openclaw/extensions/channels\" ]; then \
   mkdir -p /home/user/.openclaw/extensions && \
-  cp -a /app/.openclaw-extensions-backup/extensions/* /home/user/.openclaw/extensions/ 2>/dev/null || true; \
+  cp -r /app/.openclaw-extensions-backup/extensions/* /home/user/.openclaw/extensions/ 2>/dev/null || true; \
   echo 'Restored openclaw extensions (channels plugin was missing)'; \
   else \
   echo 'channels plugin exists, skipping restore'; \
@@ -64,7 +64,7 @@ CMD ["sh", "-c", "\
   mkdir -p /home/user/.claude/skills && \
   for p in /app/.skills-backup/*; do \
   name=\"$(basename \"$p\")\"; \
-  cp -a \"$p\" /home/user/.claude/skills/ 2>/dev/null || true; \
+  cp -r \"$p\" /home/user/.claude/skills/ 2>/dev/null || true; \
   echo \"Restored skill entry (overwrite): $name\"; \
   done && \
   openclaw gateway run --port 18789 --bind lan & \
