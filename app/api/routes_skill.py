@@ -34,6 +34,8 @@ from app.repositories.skill_desc_zh_cache_repo import SkillDescZhCacheRepository
 
 from pydantic import BaseModel, Field
 
+from app.repositories.skill_favorite import SkillFavoriteRepository
+
 router = APIRouter()
 
 
@@ -42,10 +44,18 @@ class SkillDeleteRequest(BaseModel):
     skill_list: list = Field([], description="skill_name list")
     skill_id_list: list = Field([], description="skill_id list")
 
+class SkillFavoriteAddRequest(BaseModel):
+    skill_list: list = Field([], description="skill_name list")
+
+class SkillFavoriteCancelRequest(BaseModel):
+    skill_list: list = Field([], description="skill_name list")
+
 
 def get_skill_desc_cache_repo(db=Depends(get_db)) -> SkillDescZhCacheRepository:
     return SkillDescZhCacheRepository(db)
 
+def get_skill_favorite_repo(db=Depends(get_db)) -> SkillFavoriteRepository:
+    return SkillFavoriteRepository(db)
 
 @router.post("/skills")
 async def create_skill(request: Request, repo: SkillDescZhCacheRepository = Depends(get_skill_desc_cache_repo)):
@@ -237,6 +247,7 @@ async def skill_list(
     limit: int = Query(50, description="每页数量"),
     offset: int = Query(0, description="偏移量"),
     cache_repo: SkillDescZhCacheRepository = Depends(get_skill_desc_cache_repo),
+    favorite_skill_repo: SkillFavoriteRepository = Depends(get_skill_favorite_repo)
 ):
     # 直接通过 openclaw CLI 获取 skill 列表（包含 source 等信息）
     oc_runner = CommandRunner()
@@ -313,6 +324,35 @@ async def skill_list(
             await run_in_threadpool(_put_once)
             zh_by_md5[key] = zh
 
+    # 1. 假设这是你从 repo 获取到的收藏列表（按时间倒序：['skillA', 'skillB']）
+    # 请确保在实际代码中调用 repo 获取这个列表
+    favorite_skills = await run_in_threadpool(
+        lambda: favorite_skill_repo.list()
+    )
+
+    # --- 排序逻辑开始 ---
+
+    # 构建一个优先级字典：{ "skill_name": 排序权重 }
+    # 收藏的技能按照列表顺序获得权重（0, 1, 2...），未收藏的统一给一个很大的权重（例如 99999）
+    priority_map = {name: idx for idx, name in enumerate(favorite_skills)}
+
+    def get_sort_key(item):
+        name = item.get("name", "")
+        if name in priority_map:
+            # 第一梯队：已收藏。保留收藏列表的顺序（index 越小越靠前）
+            return (0, priority_map[name])
+        else:
+            # 第二梯队：未收藏。这里可以选择按名字字母排序，方便查阅
+            return (1, name)
+
+    # 先过滤掉非字典的数据，然后根据规则排序
+    sorted_items = sorted(
+        [s for s in items if isinstance(s, dict)],
+        key=get_sort_key
+    )
+
+    # --- 排序逻辑结束 ---
+
     return ok(
         {
             "user_skills": [
@@ -323,15 +363,17 @@ async def skill_list(
                     "description_zh": zh_by_md5.get(_md5_16(s.get("description")))
                     if isinstance(s.get("description"), str) and s.get("description")
                     else "",
-                    "source":"openclaw-bundled" if (isinstance(s.get("name"), str) and s.get("name") == "302ai-search") else ((s.get("source") or "") if isinstance(s.get("source"), str) else ""),
+                    "source": "openclaw-bundled" if (
+                                isinstance(s.get("name"), str) and s.get("name") == "302ai-search") else (
+                        (s.get("source") or "") if isinstance(s.get("source"), str) else ""),
                     "eligible": bool(s.get("eligible")) if "eligible" in s else None,
                     "disabled": bool(s.get("disabled")) if "disabled" in s else None,
                     "bundled": bool(s.get("bundled")) if "bundled" in s else None,
                     "blockedByAllowlist": bool(s.get("blockedByAllowlist")) if "blockedByAllowlist" in s else None,
                     "missing": s.get("missing") if isinstance(s.get("missing"), dict) else None,
                 }
-                for s in items
-                if isinstance(s, dict)
+                # 这里改用排序后的 sorted_items
+                for s in sorted_items
             ],
             "builtin_skills": [],
             "project_skills": [],
@@ -396,3 +438,30 @@ async def skill_delete(
 
     return ok({"data": {"result": delete_result}})
 
+
+@router.post("/skills/favorite/add")
+async def skill_favorite_add(payload: SkillFavoriteAddRequest,
+                             repo: SkillFavoriteRepository = Depends(get_skill_favorite_repo)):
+
+    def op():
+        with repo.atomic():
+            for skill_name in payload.skill_list:
+                repo.add(skill_name=skill_name)
+
+    await run_in_threadpool(op)
+
+    return ok()
+
+
+@router.post("/skills/favorite/cancel")
+async def skill_favorite_add(payload: SkillFavoriteCancelRequest,
+                             repo: SkillFavoriteRepository = Depends(get_skill_favorite_repo)):
+
+    def op():
+        with repo.atomic():
+            for skill_name in payload.skill_list:
+                repo.delete(skill_name=skill_name)
+
+    await run_in_threadpool(op)
+
+    return ok()
