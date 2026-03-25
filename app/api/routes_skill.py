@@ -243,11 +243,11 @@ async def skill_list(
     oc_result = await oc_runner.exec_json("openclaw skills list --json")
 
     oc_skills: list[dict] = []
-    if oc_result.exit_code == 0 and oc_result.stdout:
+    if oc_result.exit_code == 0:
         try:
             import json
 
-            loaded = json.loads(oc_result.stdout)
+            loaded = json.loads(oc_result.stdout or oc_result.stderr)  # 升级到openclaw 2026.3.22-2版本后，获取skills的结果意外输出到stderr
             # openclaw skills list --json 输出为 { ..., "skills": [...] }
             if isinstance(loaded, dict) and isinstance(loaded.get("skills"), list):
                 oc_skills = [x for x in loaded["skills"] if isinstance(x, dict)]
