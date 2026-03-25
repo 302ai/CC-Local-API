@@ -454,7 +454,7 @@ async def skill_favorite_add(payload: SkillFavoriteAddRequest,
 
 
 @router.post("/skills/favorite/cancel")
-async def skill_favorite_add(payload: SkillFavoriteCancelRequest,
+async def skill_favorite_cancel(payload: SkillFavoriteCancelRequest,
                              repo: SkillFavoriteRepository = Depends(get_skill_favorite_repo)):
 
     def op():
