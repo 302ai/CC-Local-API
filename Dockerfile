@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
   && apt-get install -y --no-install-recommends nodejs \
   && npm install -g @anthropic-ai/claude-code@latest \
-  && npm install -g openclaw@2026.3.13 \
+  && npm install -g openclaw@latest \
   && npm install -g clawhub@latest \
   && npm install -g @playwright/cli@latest \
   && apt-get clean \
@@ -39,7 +39,8 @@ COPY skills/ /app/.skills-backup/
 ENV HOME=/home/user
 
 # 安装插件
-RUN openclaw plugins install @openclaw-china/channels@2026.3.10
+RUN openclaw plugins install @openclaw-china/channels@latest
+RUN openclaw plugins install @openclaw/acpx
 RUN #npx -y @tencent-weixin/openclaw-weixin-cli@latest install
 
 # 把插件数据备份到不会被挂载覆盖的目录
