@@ -324,33 +324,25 @@ async def skill_list(
             await run_in_threadpool(_put_once)
             zh_by_md5[key] = zh
 
-    # 1. 假设这是你从 repo 获取到的收藏列表（按时间倒序：['skillA', 'skillB']）
-    # 请确保在实际代码中调用 repo 获取这个列表
+    # 1. 获取收藏列表
     favorite_skills = await run_in_threadpool(
         lambda: favorite_skill_repo.list()
     )
 
     # --- 排序逻辑开始 ---
-
-    # 构建一个优先级字典：{ "skill_name": 排序权重 }
-    # 收藏的技能按照列表顺序获得权重（0, 1, 2...），未收藏的统一给一个很大的权重（例如 99999）
     priority_map = {name: idx for idx, name in enumerate(favorite_skills)}
 
     def get_sort_key(item):
         name = item.get("name", "")
         if name in priority_map:
-            # 第一梯队：已收藏。保留收藏列表的顺序（index 越小越靠前）
             return (0, priority_map[name])
         else:
-            # 第二梯队：未收藏。这里可以选择按名字字母排序，方便查阅
             return (1, name)
 
-    # 先过滤掉非字典的数据，然后根据规则排序
     sorted_items = sorted(
         [s for s in items if isinstance(s, dict)],
         key=get_sort_key
     )
-
     # --- 排序逻辑结束 ---
 
     return ok(
@@ -364,15 +356,16 @@ async def skill_list(
                     if isinstance(s.get("description"), str) and s.get("description")
                     else "",
                     "source": "openclaw-bundled" if (
-                                isinstance(s.get("name"), str) and s.get("name") == "302ai-search") else (
+                            isinstance(s.get("name"), str) and s.get("name") == "302ai-search") else (
                         (s.get("source") or "") if isinstance(s.get("source"), str) else ""),
                     "eligible": bool(s.get("eligible")) if "eligible" in s else None,
                     "disabled": bool(s.get("disabled")) if "disabled" in s else None,
                     "bundled": bool(s.get("bundled")) if "bundled" in s else None,
                     "blockedByAllowlist": bool(s.get("blockedByAllowlist")) if "blockedByAllowlist" in s else None,
                     "missing": s.get("missing") if isinstance(s.get("missing"), dict) else None,
+                    "is_favorite": s.get("name") in priority_map,
+
                 }
-                # 这里改用排序后的 sorted_items
                 for s in sorted_items
             ],
             "builtin_skills": [],
