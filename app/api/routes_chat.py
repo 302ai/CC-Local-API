@@ -768,7 +768,6 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
 
                     if list_sessions_result.exit_code != 0:
                         raise Exception(list_sessions_result.stderr)
-
                     try:
                         data = json.loads(list_sessions_result.stdout)
                     except json.decoder.JSONDecodeError:
