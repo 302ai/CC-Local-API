@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import io
@@ -251,6 +252,9 @@ async def skill_list(
 ):
     # 直接通过 openclaw CLI 获取 skill 列表（包含 source 等信息）
     oc_runner = CommandRunner()
+
+    await asyncio.sleep(1) # fix 操作skill之后请求马上过来，OC还没刷新SKILL
+
     oc_result = await oc_runner.exec_json("openclaw skills list --json")
 
     oc_skills: list[dict] = []
