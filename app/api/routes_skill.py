@@ -352,8 +352,17 @@ async def skill_list(
     )
 
     # --- 排序逻辑开始 ---
-    # 收藏优先级：收藏列表中的顺序
-    priority_map = {name: idx for idx, name in enumerate(favorite_skills)}
+    # 收藏优先级：按收藏时间倒序排列（repo 层已保证顺序），构建 name -> idx 映射
+    priority_map = {
+        item["skill_name"]: idx
+        for idx, item in enumerate(favorite_skills)
+    }
+
+    # 收藏时间映射：skill_name -> favorite_time
+    favorite_time_map = {
+        item["skill_name"]: item["favorite_time"]
+        for item in favorite_skills
+    }
 
     # 手动导入时间映射：skill_name -> manual_import_time
     manual_time_map = {
@@ -373,7 +382,6 @@ async def skill_list(
             # 第二优先级：非收藏的 skill，按手动导入时间倒序排列（越新越靠前）
             # 不存在手动导入时间的视为 ZERO_TIME，排在最后
             import_time = manual_time_map.get(name, ZERO_TIME)
-            # 取负时间戳实现倒序
             return (1, -import_time.timestamp() if import_time else 0, name)
 
     sorted_items = sorted(
@@ -402,8 +410,13 @@ async def skill_list(
                         s.get("blockedByAllowlist")) if "blockedByAllowlist" in s else None,
                     "missing": s.get("missing") if isinstance(s.get("missing"), dict) else None,
                     "is_favorite": s.get("name") in priority_map,
-                    "manual_import_at": manual_time_map.get(s.get("name")).strftime("%Y-%m-%dT%H:%M:%S.%fZ") if manual_time_map.get(s.get("name")) else None,
-
+                    # 新增：收藏时间
+                    "favorite_at": favorite_time_map[s.get("name")].strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                    if s.get("name") in favorite_time_map and favorite_time_map.get(s.get("name"))
+                    else None,
+                    "manual_import_at": manual_time_map.get(s.get("name")).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                    if manual_time_map.get(s.get("name"))
+                    else None,
                 }
                 for s in sorted_items
             ],

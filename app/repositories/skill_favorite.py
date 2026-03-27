@@ -38,7 +38,7 @@ class SkillFavoriteRepository:
 
         return after > before
 
-    def list(self) -> list[str]:
+    def list(self) -> list[dict]:
         """
         获取所有收藏的技能名。
         按照收藏时间倒序排列（最新的在最前面）。
@@ -47,10 +47,16 @@ class SkillFavoriteRepository:
 
         q = (
             SkillFavorite
-            .select(SkillFavorite.skill_name)
+            .select(SkillFavorite.skill_name, SkillFavorite.favorite_time)
             .order_by(SkillFavorite.favorite_time.desc())  # 倒序：最新收藏的在前
         )
-        return [row.skill_name for row in q]
+        return [
+            {
+                "skill_name": row.skill_name,
+                "favorite_time": row.favorite_time,
+            }
+            for row in q
+        ]
 
     def delete(self, *, skill_name: str) -> bool:
         """
