@@ -860,10 +860,14 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                     combined = "".join(collected_text_chunks)
                     matches = file_regex.findall(combined)
                     if matches:
+                        # 校验路径是否存在，只保留存在的
+                        valid_matches = [m for m in matches if os.path.isfile(m)]
+                        log_warning(f"{matches}")
+                        log_warning(f"{valid_matches}")
                         deploy_check_info = json.dumps({
                             "type": "result",
                             "is_error": False,
-                            "result": "\n".join(f"-`{m}`"for m in matches),
+                            "result": "\n".join(f"-`{m}`" for m in valid_matches) if valid_matches else "",
                         }, ensure_ascii=False)
                         chunk = gpt_stream_chunk(deploy_check_info)
                         yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
