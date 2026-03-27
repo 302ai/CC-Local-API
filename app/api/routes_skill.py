@@ -9,6 +9,7 @@ import os
 import shutil
 import tempfile
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
@@ -36,6 +37,7 @@ from app.repositories.skill_desc_zh_cache_repo import SkillDescZhCacheRepository
 from pydantic import BaseModel, Field
 
 from app.repositories.skill_favorite import SkillFavoriteRepository
+from app.repositories.skill_manual_import import SkillManualImportRepository
 
 router = APIRouter()
 
@@ -58,14 +60,21 @@ def get_skill_desc_cache_repo(db=Depends(get_db)) -> SkillDescZhCacheRepository:
 def get_skill_favorite_repo(db=Depends(get_db)) -> SkillFavoriteRepository:
     return SkillFavoriteRepository(db)
 
+def get_skill_manual_import_repo(db=Depends(get_db)) -> SkillManualImportRepository:
+    return SkillManualImportRepository(db)
+
+
 @router.post("/skills")
-async def create_skill(request: Request, repo: SkillDescZhCacheRepository = Depends(get_skill_desc_cache_repo)):
+async def create_skill(request: Request,
+                       repo: SkillDescZhCacheRepository = Depends(get_skill_desc_cache_repo),
+                       manual_skill_repo: SkillManualImportRepository = Depends(get_skill_manual_import_repo)):
     """
 
     用户上传zip压缩包或者提供github链接，将数据先下载到临时文件，遍历寻找SKILL.md拷贝到实际保存位置
 
     skill名字/描述通过解析SKILL.md里的yaml元信息获得
 
+    :param manual_skill_repo:
     :param request:
     :param repo:
     :return:
@@ -189,6 +198,11 @@ async def create_skill(request: Request, repo: SkillDescZhCacheRepository = Depe
             "description_zh": description_zh,
         })
 
+        with manual_skill_repo.atomic():
+            await run_in_threadpool(
+                lambda: manual_skill_repo.upsert(skill_name=name)
+            )
+    await asyncio.sleep(1)  # fix 操作skill之后请求马上过来，OC还没刷新SKILL
     return ok({"user_skills": skill_list})
 
 @router.get("/skills/detail")
@@ -248,12 +262,11 @@ async def skill_list(
     limit: int = Query(50, description="每页数量"),
     offset: int = Query(0, description="偏移量"),
     cache_repo: SkillDescZhCacheRepository = Depends(get_skill_desc_cache_repo),
-    favorite_skill_repo: SkillFavoriteRepository = Depends(get_skill_favorite_repo)
+    favorite_skill_repo: SkillFavoriteRepository = Depends(get_skill_favorite_repo),
+    manual_skill_repo: SkillManualImportRepository = Depends(get_skill_manual_import_repo)
 ):
     # 直接通过 openclaw CLI 获取 skill 列表（包含 source 等信息）
     oc_runner = CommandRunner()
-
-    await asyncio.sleep(1) # fix 操作skill之后请求马上过来，OC还没刷新SKILL
 
     oc_result = await oc_runner.exec_json("openclaw skills list --json")
 
@@ -333,15 +346,35 @@ async def skill_list(
         lambda: favorite_skill_repo.list()
     )
 
+    # 获取手动导入skills的时间信息
+    manual_skills = await run_in_threadpool(
+        lambda: manual_skill_repo.list()
+    )
+
     # --- 排序逻辑开始 ---
+    # 收藏优先级：收藏列表中的顺序
     priority_map = {name: idx for idx, name in enumerate(favorite_skills)}
+
+    # 手动导入时间映射：skill_name -> manual_import_time
+    manual_time_map = {
+        item["skill_name"]: item["manual_import_time"]
+        for item in manual_skills
+    }
+
+    # 用于排序的零时间基准
+    ZERO_TIME = datetime(1970, 1, 1)
 
     def get_sort_key(item):
         name = item.get("name", "")
         if name in priority_map:
-            return (0, priority_map[name])
+            # 第一优先级：收藏的 skill，按收藏顺序排列
+            return (0, priority_map[name], ZERO_TIME)
         else:
-            return (1, name)
+            # 第二优先级：非收藏的 skill，按手动导入时间倒序排列（越新越靠前）
+            # 不存在手动导入时间的视为 ZERO_TIME，排在最后
+            import_time = manual_time_map.get(name, ZERO_TIME)
+            # 取负时间戳实现倒序
+            return (1, -import_time.timestamp() if import_time else 0, name)
 
     sorted_items = sorted(
         [s for s in items if isinstance(s, dict)],
@@ -365,9 +398,11 @@ async def skill_list(
                     "eligible": bool(s.get("eligible")) if "eligible" in s else None,
                     "disabled": bool(s.get("disabled")) if "disabled" in s else None,
                     "bundled": bool(s.get("bundled")) if "bundled" in s else None,
-                    "blockedByAllowlist": bool(s.get("blockedByAllowlist")) if "blockedByAllowlist" in s else None,
+                    "blockedByAllowlist": bool(
+                        s.get("blockedByAllowlist")) if "blockedByAllowlist" in s else None,
                     "missing": s.get("missing") if isinstance(s.get("missing"), dict) else None,
                     "is_favorite": s.get("name") in priority_map,
+                    "manual_import_at": manual_time_map.get(s.get("name")).strftime("%Y-%m-%dT%H:%M:%S.%fZ") if manual_time_map.get(s.get("name")) else None,
 
                 }
                 for s in sorted_items
