@@ -222,28 +222,28 @@ async def init_project(payload: ProjectInitRequest, repo: SessionRepository = De
 
             oc_agent_id = workspace_name
 
-            new_resp, list_sessions_result = await oc_new_session_and_list_active(
-                oc_agent_id=oc_agent_id,
-                runner=runner,
-                active=3,
-            )
-            log_info(f"{new_resp}")
+        new_resp, list_sessions_result = await oc_new_session_and_list_active(
+            oc_agent_id=oc_agent_id,
+            runner=runner,
+            active=3,
+        )
+        log_info(f"{new_resp}")
 
-            if list_sessions_result.exit_code != 0:
-                return fail(list_sessions_result.stderr, status_code=400)
-            try:
-                data = json.loads(list_sessions_result.stdout)
-            except json.decoder.JSONDecodeError:
-                # fix openclaw 3.13 CLI --json没正确返回json格式
-                data = await oc_load_sessions_json_as_list(oc_agent_name=oc_agent_id)
-            sessions = data.get("sessions", [])
+        if list_sessions_result.exit_code != 0:
+            return fail(list_sessions_result.stderr, status_code=400)
+        try:
+            data = json.loads(list_sessions_result.stdout)
+        except json.decoder.JSONDecodeError:
+            # fix openclaw 3.13 CLI --json没正确返回json格式
+            data = await oc_load_sessions_json_as_list(oc_agent_name=oc_agent_id)
+        sessions = data.get("sessions", [])
 
-            if not sessions:
-                return fail("No active sessions found", status_code=400)
+        if not sessions:
+            return fail("No active sessions found", status_code=400)
 
-            # 按 updatedAt 降序排序，取最新的一个
-            latest_session = max(sessions, key=lambda s: s.get("updatedAt", 0))
-            log_info(f"{latest_session}")
+        # 按 updatedAt 降序排序，取最新的一个
+        latest_session = max(sessions, key=lambda s: s.get("updatedAt", 0))
+        log_info(f"{latest_session}")
 
         await run_in_threadpool(lambda: repo.create_session(
             session_alias=payload.session_id,
