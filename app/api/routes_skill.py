@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import io
@@ -8,6 +9,7 @@ import os
 import shutil
 import tempfile
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
@@ -34,6 +36,9 @@ from app.repositories.skill_desc_zh_cache_repo import SkillDescZhCacheRepository
 
 from pydantic import BaseModel, Field
 
+from app.repositories.skill_favorite import SkillFavoriteRepository
+from app.repositories.skill_manual_import import SkillManualImportRepository
+
 router = APIRouter()
 
 
@@ -42,19 +47,34 @@ class SkillDeleteRequest(BaseModel):
     skill_list: list = Field([], description="skill_name list")
     skill_id_list: list = Field([], description="skill_id list")
 
+class SkillFavoriteAddRequest(BaseModel):
+    skill_list: list = Field([], description="skill_name list")
+
+class SkillFavoriteCancelRequest(BaseModel):
+    skill_list: list = Field([], description="skill_name list")
+
 
 def get_skill_desc_cache_repo(db=Depends(get_db)) -> SkillDescZhCacheRepository:
     return SkillDescZhCacheRepository(db)
 
+def get_skill_favorite_repo(db=Depends(get_db)) -> SkillFavoriteRepository:
+    return SkillFavoriteRepository(db)
+
+def get_skill_manual_import_repo(db=Depends(get_db)) -> SkillManualImportRepository:
+    return SkillManualImportRepository(db)
+
 
 @router.post("/skills")
-async def create_skill(request: Request, repo: SkillDescZhCacheRepository = Depends(get_skill_desc_cache_repo)):
+async def create_skill(request: Request,
+                       repo: SkillDescZhCacheRepository = Depends(get_skill_desc_cache_repo),
+                       manual_skill_repo: SkillManualImportRepository = Depends(get_skill_manual_import_repo)):
     """
 
     用户上传zip压缩包或者提供github链接，将数据先下载到临时文件，遍历寻找SKILL.md拷贝到实际保存位置
 
     skill名字/描述通过解析SKILL.md里的yaml元信息获得
 
+    :param manual_skill_repo:
     :param request:
     :param repo:
     :return:
@@ -178,6 +198,11 @@ async def create_skill(request: Request, repo: SkillDescZhCacheRepository = Depe
             "description_zh": description_zh,
         })
 
+        with manual_skill_repo.atomic():
+            await run_in_threadpool(
+                lambda: manual_skill_repo.upsert(skill_name=name)
+            )
+    await asyncio.sleep(1)  # fix 操作skill之后请求马上过来，OC还没刷新SKILL
     return ok({"user_skills": skill_list})
 
 @router.get("/skills/detail")
@@ -237,17 +262,20 @@ async def skill_list(
     limit: int = Query(50, description="每页数量"),
     offset: int = Query(0, description="偏移量"),
     cache_repo: SkillDescZhCacheRepository = Depends(get_skill_desc_cache_repo),
+    favorite_skill_repo: SkillFavoriteRepository = Depends(get_skill_favorite_repo),
+    manual_skill_repo: SkillManualImportRepository = Depends(get_skill_manual_import_repo)
 ):
     # 直接通过 openclaw CLI 获取 skill 列表（包含 source 等信息）
     oc_runner = CommandRunner()
+
     oc_result = await oc_runner.exec_json("openclaw skills list --json")
 
     oc_skills: list[dict] = []
-    if oc_result.exit_code == 0 and oc_result.stdout:
+    if oc_result.exit_code == 0:
         try:
             import json
 
-            loaded = json.loads(oc_result.stdout)
+            loaded = json.loads(oc_result.stdout or oc_result.stderr)  # 升级到openclaw 2026.3.22-2版本后，获取skills的结果意外输出到stderr
             # openclaw skills list --json 输出为 { ..., "skills": [...] }
             if isinstance(loaded, dict) and isinstance(loaded.get("skills"), list):
                 oc_skills = [x for x in loaded["skills"] if isinstance(x, dict)]
@@ -313,6 +341,55 @@ async def skill_list(
             await run_in_threadpool(_put_once)
             zh_by_md5[key] = zh
 
+    # 1. 获取收藏列表
+    favorite_skills = await run_in_threadpool(
+        lambda: favorite_skill_repo.list()
+    )
+
+    # 获取手动导入skills的时间信息
+    manual_skills = await run_in_threadpool(
+        lambda: manual_skill_repo.list()
+    )
+
+    # --- 排序逻辑开始 ---
+    # 收藏优先级：按收藏时间倒序排列（repo 层已保证顺序），构建 name -> idx 映射
+    priority_map = {
+        item["skill_name"]: idx
+        for idx, item in enumerate(favorite_skills)
+    }
+
+    # 收藏时间映射：skill_name -> favorite_time
+    favorite_time_map = {
+        item["skill_name"]: item["favorite_time"]
+        for item in favorite_skills
+    }
+
+    # 手动导入时间映射：skill_name -> manual_import_time
+    manual_time_map = {
+        item["skill_name"]: item["manual_import_time"]
+        for item in manual_skills
+    }
+
+    # 用于排序的零时间基准
+    ZERO_TIME = datetime(1970, 1, 1)
+
+    def get_sort_key(item):
+        name = item.get("name", "")
+        if name in priority_map:
+            # 第一优先级：收藏的 skill，按收藏顺序排列
+            return (0, priority_map[name], ZERO_TIME)
+        else:
+            # 第二优先级：非收藏的 skill，按手动导入时间倒序排列（越新越靠前）
+            # 不存在手动导入时间的视为 ZERO_TIME，排在最后
+            import_time = manual_time_map.get(name, ZERO_TIME)
+            return (1, -import_time.timestamp() if import_time else 0, name)
+
+    sorted_items = sorted(
+        [s for s in items if isinstance(s, dict)],
+        key=get_sort_key
+    )
+    # --- 排序逻辑结束 ---
+
     return ok(
         {
             "user_skills": [
@@ -323,15 +400,25 @@ async def skill_list(
                     "description_zh": zh_by_md5.get(_md5_16(s.get("description")))
                     if isinstance(s.get("description"), str) and s.get("description")
                     else "",
-                    "source": (s.get("source") or "") if isinstance(s.get("source"), str) else "",
+                    "source": "openclaw-bundled" if (
+                            isinstance(s.get("name"), str) and s.get("name") == "302ai-search") else (
+                        (s.get("source") or "") if isinstance(s.get("source"), str) else ""),
                     "eligible": bool(s.get("eligible")) if "eligible" in s else None,
                     "disabled": bool(s.get("disabled")) if "disabled" in s else None,
                     "bundled": bool(s.get("bundled")) if "bundled" in s else None,
-                    "blockedByAllowlist": bool(s.get("blockedByAllowlist")) if "blockedByAllowlist" in s else None,
+                    "blockedByAllowlist": bool(
+                        s.get("blockedByAllowlist")) if "blockedByAllowlist" in s else None,
                     "missing": s.get("missing") if isinstance(s.get("missing"), dict) else None,
+                    "is_favorite": s.get("name") in priority_map,
+                    # 新增：收藏时间
+                    "favorite_at": favorite_time_map[s.get("name")].strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                    if s.get("name") in favorite_time_map and favorite_time_map.get(s.get("name"))
+                    else None,
+                    "manual_import_at": manual_time_map.get(s.get("name")).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                    if manual_time_map.get(s.get("name"))
+                    else None,
                 }
-                for s in items
-                if isinstance(s, dict)
+                for s in sorted_items
             ],
             "builtin_skills": [],
             "project_skills": [],
@@ -396,3 +483,30 @@ async def skill_delete(
 
     return ok({"data": {"result": delete_result}})
 
+
+@router.post("/skills/favorite/add")
+async def skill_favorite_add(payload: SkillFavoriteAddRequest,
+                             repo: SkillFavoriteRepository = Depends(get_skill_favorite_repo)):
+
+    def op():
+        with repo.atomic():
+            for skill_name in payload.skill_list:
+                repo.add(skill_name=skill_name)
+
+    await run_in_threadpool(op)
+
+    return ok()
+
+
+@router.post("/skills/favorite/cancel")
+async def skill_favorite_cancel(payload: SkillFavoriteCancelRequest,
+                             repo: SkillFavoriteRepository = Depends(get_skill_favorite_repo)):
+
+    def op():
+        with repo.atomic():
+            for skill_name in payload.skill_list:
+                repo.delete(skill_name=skill_name)
+
+    await run_in_threadpool(op)
+
+    return ok()
