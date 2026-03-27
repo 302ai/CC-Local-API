@@ -846,7 +846,8 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                 prefix = "\n\n".join(prefix_parts) + "\n\n"
                 final_user_prompt = prefix + user_prompt
             collected_text_chunks: list[str] = []
-            file_regex = re.compile(r"^- `?(\/[\S`]+)`?", re.MULTILINE)
+            # 确保扩展名在路径最后一个 / 之后
+            file_regex = re.compile(r"^- `?(\/\S+\/[^/\s]+\.[^/\s`]+)`?$", re.MULTILINE)
 
             async for event in oc_chat_completions_sse(
                     oc_session_key=oc_session_key,
