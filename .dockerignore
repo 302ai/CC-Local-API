@@ -1,7 +1,11 @@
 .claude
+__pycache__
 .git
+.github
+.idea
 .venv
 app.db*
 docker-compose.yml
+docker-compose.yml*
 
 .gitignore
