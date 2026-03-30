@@ -12,7 +12,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}
   # 阿里云镜像仓库地址
   ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
-  ALIYUN_IMAGE: ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/your-image-name  # ← 改成你的镜像名
+  ALIYUN_IMAGE: ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/local_agent
 
 jobs:
   push_to_registry:
