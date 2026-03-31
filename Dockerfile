@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && npm install -g openclaw@2026.3.23-2 \
   && npm install -g clawhub@latest \
   && npm install -g @playwright/cli@latest \
+  && npm install -g acpx@latest \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/* \
   && rm -rf /root/.npm \

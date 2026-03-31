@@ -842,7 +842,9 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                 prefix_parts.append(f"当前工作目录：{workspace_path}")
                 prefix_parts.append(f"附件目录：{workspace_path}/.302ai/attachments")
                 prefix_parts.append(
-                    f"如果是编程相关任务，请先阅读 {workspace_path}/CLAUDE.md（里面有我使用claude code开发习惯），实现代码需要通过ACPX调用claude code， 具体见工作区里的AGENT.md")
+                    f"如果是编程相关任务，请先阅读 {workspace_path}/CLAUDE.md（里面有我使用claude code开发习惯")
+                prefix_parts.append(
+                    f"实现代码需要通过ACPX调用claude code， 具体见工作区里的AGENT.md里ACP相关的信息")
                 prefix_parts.append(
                     f"如果是编程相关任务，阅读 acpx skill 参考文档，了解所有命令、标志和工作流模式：/home/user/.claude/skills/SKILL.md")
                 prefix_parts.append(
