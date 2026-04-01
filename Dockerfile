@@ -26,12 +26,12 @@ RUN mkdir -p /data /app /home/user/.claude/skills /home/user/.openclaw /home/use
   chmod 755 /home/user/.openclaw /home/user/.claude /home/user/.claude/skills && \
   chmod 755 /data /app /home/user
 
-# 预下载 acpx skill 和文档
-RUN curl -fsSL -o /home/user/.claude/skills/SKILL.md \
-  https://raw.githubusercontent.com/openclaw/acpx/main/skills/acpx/SKILL.md && \
-  mkdir -p /home/user/acpx/docs && \
-  curl -fsSL -o /home/user/acpx/docs/CLI.md \
-  https://raw.githubusercontent.com/openclaw/acpx/main/docs/CLI.md
+# 预下载 acpx skill 和文档（放到 /app 备份目录，避免被挂载覆盖）
+RUN mkdir -p /app/.acpx-backup/skills/acpx /app/.acpx-backup/docs && \
+  curl -fsSL -o /app/.acpx-backup/skills/acpx/SKILL.md \
+    https://raw.githubusercontent.com/openclaw/acpx/main/skills/acpx/SKILL.md && \
+  curl -fsSL -o /app/.acpx-backup/docs/CLI.md \
+    https://raw.githubusercontent.com/openclaw/acpx/main/docs/CLI.md
 
 # 安装 Python 依赖
 WORKDIR /app

@@ -995,10 +995,6 @@ acpx claude -s acpx-claude-{session_id} --cwd /home/user/projects/myapp "修复 
 # ❌ 错误做法（禁止这样做）：
 # acpx claude -s acpx-claude-{session_id} --cwd /home/user/.openclaw/workspace "修复 bug"
 ```
-
-#### 二进制路径
-```bash
-ACPX_CMD="acpx"  # 已全局安装
 ```
 
 ---
