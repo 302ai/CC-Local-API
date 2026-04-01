@@ -1,13 +1,31 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from contextvars import ContextVar
 
 from fastapi import Request
 from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 
 from app.utils.utils import get_uuid
+
+
+def _load_openclaw_gateway_token() -> str:
+    config_path = os.environ.get("OPENCLAW_CONFIG_PATH")
+    if not config_path:
+        return ""
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        token = ((data.get("gateway") or {}).get("auth") or {}).get("token")
+        return token if isinstance(token, str) and token else ""
+    except Exception as e:
+        logger.warning(f"OPENCLAW_CONFIG_PATH load failed: {config_path}: {e}")
+        return ""
 
 REQUEST_ID_HEADER = "X-Request-ID"
 
@@ -35,11 +53,37 @@ def truncate_long_strings(obj, max_length: int = 50):
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app):
+        super().__init__(app)
+        self._gateway_token = ""
+        self._gateway_token_loaded_at = 0.0
+
+    def _refresh_gateway_token_if_needed(self) -> None:
+        if not os.environ.get("OPENCLAW_CONFIG_PATH"):
+            self._gateway_token = ""
+            self._gateway_token_loaded_at = 0.0
+            return
+
+        now = time.time()
+        if self._gateway_token_loaded_at and (now - self._gateway_token_loaded_at) < 60:
+            return
+
+        self._gateway_token = _load_openclaw_gateway_token()
+        self._gateway_token_loaded_at = now
+
     async def dispatch(self, request: Request, call_next):
         request_id = get_uuid(remove_hyphen=True)
         request.state.request_id = request_id
         request.state.upstream_request_id = ""
         token = request_id_ctx.set(request_id)
+
+        self._refresh_gateway_token_if_needed()
+        if self._gateway_token and request.client and request.client.host not in {"127.0.0.1", "::1"}:
+            auth = request.headers.get("Authorization")
+            expected = f"Bearer {self._gateway_token}"
+            if auth != expected:
+                request_id_ctx.reset(token)
+                return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
 
         # Streaming endpoints: don't read body.
         is_streaming = False
