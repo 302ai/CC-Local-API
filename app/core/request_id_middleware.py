@@ -65,7 +65,15 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
             expected = f"Bearer {self._create_instance_apikey}"
             if auth != expected:
                 request_id_ctx.reset(token)
-                return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+                return JSONResponse(status_code=401, content={
+                    "error": {
+                        "err_code": -10001,
+                        "message": "Missing 302 Apikey",
+                        "message_cn": "缺少 302 API 密钥",
+                        "message_jp": "302 APIキーがありません",
+                        "type": "api_error"
+                    }
+                })
 
         # Streaming endpoints: don't read body.
         is_streaming = False
