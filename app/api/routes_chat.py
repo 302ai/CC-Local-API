@@ -834,13 +834,13 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                     "- 或用户消息中出现：fix/bug/implement/add/refactor/test/build/run/compile/commit/PR/diff/文件/路径/报错/日志 等关键词\n\n"
                     "总规则：\n"
                     "1) 只要是编程任务，你【必须】通过 ACPX 调用 Claude Code 完成工作；你自己【禁止】直接给出最终代码实现/补丁/测试结论（除非这些内容来自 Claude Code 的输出并被你转述）。\n"
-                    "2) 开始前你【必须】先读取并遵循工作区内文档：AGENT.md（ACP/ACPX 说明）与 CLAUDE.md（开发习惯/约束）。\n"
+                    "2) 开始前你【必须】先读取并遵循工作区内文档：AGENTS.md（ACP/ACPX 说明）与 CLAUDE.md（开发习惯/约束）。\n"
                     "3) 你必须优先使用“持久会话”，会话名固定为：\n"
                     "   acpx-claude-{openclaw_session_id}\n"
                     "4) 超时（必须遵守）：\n"
                     "   - 默认超时：600 秒（10 分钟）\n"
                     "   - 复杂任务：1200 秒（20 分钟）或更长\n"
-                    "   - 调用 acpx 时必须显式设置超时参数（按 AGENT.md / ACPX CLI 支持的方式传入），禁止省略\n"
+                    "   - 调用 acpx 时必须显式设置超时参数（按 AGENTS.md / ACPX CLI 支持的方式传入），禁止省略\n"
                     "5) 工作目录（--cwd）规则：\n"
                     "   - 若用户在自然语言里明确给出目录路径：必须将该路径原样用于 --cwd（禁止自作主张改路径）\n"
                     "   - 否则：使用“当前工作目录”（本 prefix 会提供 workspace_path）作为 --cwd\n\n"
@@ -880,7 +880,7 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                 prefix_parts.append(
                     f"如果是编程相关任务，请先阅读 {workspace_path}/CLAUDE.md（里面有我使用claude code开发习惯")
                 prefix_parts.append(
-                    f"实现代码需要通过ACPX调用claude code， 具体见工作区里的AGENT.md里ACP相关的信息")
+                    f"实现代码需要通过ACPX调用claude code， 具体见工作区里的AGENTS.md里ACP相关的信息")
                 prefix_parts.append(
                     f"如果是编程相关任务，阅读 acpx skill 参考文档，了解所有命令、标志和工作流模式：/home/user/.claude/skills/acpx/SKILL.md")
                 prefix_parts.append(
