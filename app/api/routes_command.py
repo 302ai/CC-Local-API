@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.api.response import ok
+from app.api.response import ok, fail
 from app.core.command_runner import CommandRunner
 
 router = APIRouter()
@@ -60,14 +60,7 @@ async def execute_command_stream(payload: CommandRequest, request: Request):
 
     # 不排队：如果同 cwd 正在执行，直接 409
     if lock.locked():
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "message": "Another command is still running for this cwd",
-                "cwd": payload.cwd,
-                "run_id": _cwd_active_run.get(cwd_key),
-            },
-        )
+        return fail("Another command is still running for this cwd", status_code=409)
 
     async def gen():
         run_id: Optional[str] = None
