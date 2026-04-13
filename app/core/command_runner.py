@@ -5,6 +5,7 @@ import os
 import signal
 import sys
 import uuid
+import shlex
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Dict, Optional
 
@@ -32,6 +33,8 @@ class CommandRunner:
 
     def __init__(self) -> None:
         self._active: Dict[str, asyncio.subprocess.Process] = {}
+        # 存储真实业务进程PID（修复核心）
+        self._real_pids: Dict[str, int] = {}
 
     def decode_output(self, data: bytes) -> str:
         try:
@@ -119,6 +122,27 @@ class CommandRunner:
         except Exception as e:
             return CommandResult(exit_code=-1, stdout="", stderr="", error=f"Execution error: {e}")
 
+    async def _get_real_child_pid(self, shell_pid: int) -> Optional[int]:
+        """
+        核心修复：获取shell进程下的真实业务子进程PID
+        Linux/Unix专用，Windows直接返回shell PID
+        """
+        if sys.platform == "win32":
+            return shell_pid
+
+        try:
+            # 读取 /proc/{shell_pid}/task/{shell_pid}/children 获取直接子进程
+            children_path = f"/proc/{shell_pid}/task/{shell_pid}/children"
+            if os.path.exists(children_path):
+                async with asyncio.Lock():
+                    with open(children_path, 'r') as f:
+                        child_pids = f.read().strip().split()
+                        if child_pids:
+                            return int(child_pids[0])
+            return None
+        except Exception:
+            return None
+
     async def stream(
             self,
             command: str,
@@ -163,7 +187,19 @@ class CommandRunner:
             proc = await asyncio.create_subprocess_shell(command, **kwargs)
             self._active[run_id] = proc
 
-            yield {"event": "start", "run_id": run_id, "pid": proc.pid, "command": command}
+            # ===================== 修复核心：获取真实PID =====================
+            real_pid = proc.pid
+            if not is_windows:
+                # 等待子进程创建（极短等待，不影响性能）
+                await asyncio.sleep(0.1)
+                child_pid = await self._get_real_child_pid(proc.pid)
+                if child_pid:
+                    real_pid = child_pid
+            self._real_pids[run_id] = real_pid
+            # ===============================================================
+
+            # 现在返回的pid就是真实业务进程PID，和ps命令完全一致
+            yield {"event": "start", "run_id": run_id, "pid": real_pid, "command": command}
 
             line_count = 0
             while True:
@@ -259,15 +295,23 @@ class CommandRunner:
         return True
 
     async def cleanup(self, run_id: str) -> None:
+        # 清理真实PID缓存
+        self._real_pids.pop(run_id, None)
         proc = self._active.pop(run_id, None)
         if proc is not None:
             await self._terminate_process(proc)
 
     def list_active(self) -> list[dict]:
-        return [
-            {"run_id": rid, "pid": proc.pid, "returncode": proc.returncode}
-            for rid, proc in self._active.items()
-        ]
+        active_list = []
+        for rid, proc in self._active.items():
+            real_pid = self._real_pids.get(rid, proc.pid)
+            active_list.append({
+                "run_id": rid,
+                "pid": real_pid,
+                "shell_pid": proc.pid,
+                "returncode": proc.returncode
+            })
+        return active_list
 
     async def _terminate_process(self, proc: asyncio.subprocess.Process, timeout: float = 5.0) -> None:
         if proc is None or proc.returncode is not None:
