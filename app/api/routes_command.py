@@ -13,10 +13,10 @@ from app.core.command_runner import CommandRunner
 
 router = APIRouter()
 
-# 单进程：按 cwd 互斥执行 /commands/stream
-# key: (cwd or "")
-_cwd_locks: dict[str, asyncio.Lock] = {}
-_cwd_active_run: dict[str, str] = {}
+# 单进程：按 command 互斥执行 /commands/stream
+# key: command
+_command_locks: dict[str, asyncio.Lock] = {}
+_command_active_run: dict[str, str] = {}
 
 
 class CommandRequest(BaseModel):
@@ -55,12 +55,12 @@ async def execute_command(payload: CommandRequest):
 async def execute_command_stream(payload: CommandRequest, request: Request):
     runner = CommandRunner()
 
-    cwd_key = payload.cwd or ""
-    lock = _cwd_locks.setdefault(cwd_key, asyncio.Lock())
+    command_key = payload.command
+    lock = _command_locks.setdefault(command_key, asyncio.Lock())
 
-    # 不排队：如果同 cwd 正在执行，直接 409
+    # 不排队：如果同 command 正在执行，直接 409
     if lock.locked():
-        return fail("Another command is still running for this cwd", status_code=409)
+        return fail("Another command is still running", status_code=409)
 
     async def gen():
         run_id: Optional[str] = None
@@ -74,7 +74,7 @@ async def execute_command_stream(payload: CommandRequest, request: Request):
             ):
                 if ev.get("event") == "start":
                     run_id = ev.get("run_id")
-                    _cwd_active_run[cwd_key] = run_id
+                    _command_active_run[command_key] = run_id
 
                 if await request.is_disconnected():
                     if run_id:
@@ -101,8 +101,8 @@ async def execute_command_stream(payload: CommandRequest, request: Request):
                 if run_id:
                     await runner.cleanup(run_id)
             finally:
-                if _cwd_active_run.get(cwd_key) == run_id:
-                    _cwd_active_run.pop(cwd_key, None)
+                if _command_active_run.get(command_key) == run_id:
+                    _command_active_run.pop(command_key, None)
                 if lock.locked():
                     lock.release()
 
