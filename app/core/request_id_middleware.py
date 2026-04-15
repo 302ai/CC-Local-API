@@ -63,17 +63,38 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         if self._create_instance_apikey and request.client and request.client.host not in {"127.0.0.1", "::1"}:
             auth = request.headers.get("Authorization") or ""
             expected = f"Bearer {self._create_instance_apikey}"
+
+            # 没有传递 API Key
+            if not auth:
+                request_id_ctx.reset(token)
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "error": {
+                            "err_code": -10001,
+                            "message": "Missing 302 Apikey",
+                            "message_cn": "缺少 302 API 密钥",
+                            "message_jp": "302 APIキーがありません",
+                            "type": "api_error"
+                        }
+                    }
+                )
+
+            # 传递了，但密钥不正确
             if auth != expected:
                 request_id_ctx.reset(token)
-                return JSONResponse(status_code=401, content={
-                    "error": {
-                        "err_code": -10001,
-                        "message": "Missing 302 Apikey",
-                        "message_cn": "缺少 302 API 密钥",
-                        "message_jp": "302 APIキーがありません",
-                        "type": "api_error"
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "error": {
+                            "err_code": -10002,
+                            "message": "Invalid API Key, for details please view 302.AI",
+                            "message_cn": "无效的API KEY，更多请访问 302.AI",
+                            "message_jp": "無効なAPIキーです。詳細は 302.AI をご覧ください。",
+                            "type": "api_error"
+                        }
                     }
-                })
+                )
 
         # Streaming endpoints: don't read body.
         is_streaming = False
