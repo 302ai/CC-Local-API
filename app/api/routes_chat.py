@@ -827,6 +827,42 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
 
                 prefix_parts: list[str] = []
 
+                prefix_parts.append(
+                    "### ACPX MANDATORY（编程任务必须执行；否则视为回答失败）\n\n"
+                    "判定为“编程任务”的条件（命中任一即是）：\n"
+                    "- 需要：修改/新增/删除代码或文件、生成补丁(diff)、修复报错、运行测试/命令、排查日志、提交 commit/PR、对某个仓库/目录进行操作\n"
+                    "- 或用户消息中出现：fix/bug/implement/add/refactor/test/build/run/compile/commit/PR/diff/文件/路径/报错/日志 等关键词\n\n"
+                    "总规则：\n"
+                    "1) 只要是编程任务，你【必须】通过 ACPX 调用 Claude Code 完成工作；你自己【禁止】直接给出最终代码实现/补丁/测试结论（除非这些内容来自 Claude Code 的输出并被你转述）。\n"
+                    "2) 开始前你【必须】先读取并遵循工作区内文档：AGENTS.md（ACP/ACPX 说明）与 CLAUDE.md（开发习惯/约束）。\n"
+                    "3) 你必须优先使用“持久会话”，会话名固定为：\n"
+                    "   acpx-claude-{openclaw_session_id}\n"
+                    "4) 超时（必须遵守）：\n"
+                    "   - 默认超时：600 秒（10 分钟）\n"
+                    "   - 复杂任务：1200 秒（20 分钟）或更长\n"
+                    "   - 调用 acpx 时必须显式设置超时参数（按 AGENTS.md / ACPX CLI 支持的方式传入），禁止省略\n"
+                    "5) 工作目录（--cwd）规则：\n"
+                    "   - 若用户在自然语言里明确给出目录路径：必须将该路径原样用于 --cwd（禁止自作主张改路径）\n"
+                    "   - 否则：使用“当前工作目录”（本 prefix 会提供 workspace_path）作为 --cwd\n\n"
+                    "固定执行流程（必须按顺序）：\n"
+                    "A. 会话探测：\n"
+                    "   acpx claude sessions show acpx-claude-{openclaw_session_id}\n"
+                    "B. 若不存在/失败，则创建会话（只需一次）：\n"
+                    "   acpx claude sessions new --name acpx-claude-{openclaw_session_id}\n"
+                    "C. 使用持久会话执行任务（必须带上 --cwd）：\n"
+                    "   acpx claude -s acpx-claude-{openclaw_session_id} --cwd <PATH> \"<完整任务描述（包含约束/验收标准/相关文件信息）>\"\n\n"
+                    "输出与可验证锚点（Claude Code 必须在最终输出中包含）：\n"
+                    "- 修改了哪些文件（路径列表）\n"
+                    "- 每个文件的变更摘要（或 diff/补丁片段）\n"
+                    "- 运行了哪些命令/测试，以及结果（失败则给出关键错误信息）\n\n"
+                    "失败即停（强制）：\n"
+                    "- 若任何 acpx 命令返回非 0 或超时：你只能输出\n"
+                    "  (1) “❌ ACPX 调用失败” + 关键 stderr/exit_code（去除无关噪声）\n"
+                    "  (2) 下一步建议（例如检查 acpx 是否可用、会话名、--cwd 路径是否存在）\n"
+                    "  然后停止；禁止继续“假装完成”或直接生成实现代码。\n\n"
+                    "非编程问题（概念解释/问答）才允许你直接回答；一旦问题转为编程任务，立刻切换到以上 ACPX 流程。"
+                )
+
                 if force_skill_lines:
                     prefix_parts.append(
                         "强制/优先 Skills（执行任务前必须先阅读对应 SKILL.md）：\n"
@@ -841,9 +877,17 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
 
                 prefix_parts.append(f"当前工作目录：{workspace_path}")
                 prefix_parts.append(f"附件目录：{workspace_path}/.302ai/attachments")
-                prefix_parts.append(f"如果是编程相关任务，请先阅读 {workspace_path}/CLAUDE.md（里面有我的开发习惯），实现代码需要通过claude code CLI生成， 而且你必须确保是在当前工作目录调用claude code的CLI，代码文件必须保存在工作目录")
+                prefix_parts.append(
+                    f"如果是编程相关任务，请先阅读 {workspace_path}/CLAUDE.md（里面有我使用claude code开发习惯")
+                prefix_parts.append(
+                    f"实现代码需要通过ACPX调用claude code， 具体见工作区里的AGENTS.md里ACP相关的信息")
+                prefix_parts.append(
+                    f"如果是编程相关任务，阅读 acpx skill 参考文档，了解所有命令、标志和工作流模式：/home/user/.claude/skills/acpx/SKILL.md")
+                prefix_parts.append(
+                    f"如果是编程相关任务，需要完整的 CLI 参考及所有选项和示例：/home/user/acpx/docs/CLI.md")
 
                 prefix = "\n\n".join(prefix_parts) + "\n\n"
+
                 final_user_prompt = prefix + user_prompt
             collected_text_chunks: list[str] = []
             # 确保扩展名在路径最后一个 / 之后

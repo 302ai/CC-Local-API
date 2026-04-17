@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && npm install -g openclaw@2026.3.23-2 \
   && npm install -g clawhub@latest \
   && npm install -g @playwright/cli@latest \
+  && npm install -g acpx@latest \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/* \
   && rm -rf /root/.npm \
@@ -24,6 +25,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN mkdir -p /data /app /home/user/.claude/skills /home/user/.openclaw /home/user/db && \
   chmod 755 /home/user/.openclaw /home/user/.claude /home/user/.claude/skills && \
   chmod 755 /data /app /home/user
+
+# 预下载 acpx skill 和文档（放到 /app 备份目录，避免被挂载覆盖）
+RUN mkdir -p /app/.acpx-backup/skills/acpx /app/.acpx-backup/docs && \
+  curl -fsSL -o /app/.acpx-backup/skills/acpx/SKILL.md \
+    https://raw.githubusercontent.com/openclaw/acpx/main/skills/acpx/SKILL.md && \
+  curl -fsSL -o /app/.acpx-backup/docs/CLI.md \
+    https://raw.githubusercontent.com/openclaw/acpx/main/docs/CLI.md
 
 # 安装 Python 依赖
 WORKDIR /app
