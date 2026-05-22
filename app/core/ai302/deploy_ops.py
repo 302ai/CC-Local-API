@@ -3,6 +3,7 @@ from pathlib import Path
 
 import aiohttp
 
+from app.core.config import settings
 from app.core.http_client import fetch_json_with_retry
 
 
@@ -37,7 +38,7 @@ async def create_302ai_deploy_task(
 
         response = await fetch_json_with_retry(
             'POST',
-            "https://api.302.ai/302/webserve/project",
+            f"{settings.ANTHROPIC_BASE_URL}/302/webserve/project",
             session=session,
             data=form_data,
             headers=headers
@@ -48,5 +49,5 @@ async def create_302ai_deploy_task(
 
 async def get_302ai_deploy_task_info(deploy_project_id, headers: dict | None = None):
     return await fetch_json_with_retry("GET",
-                                f"https://api.302.ai/302/webserve/project?project_id={deploy_project_id}",
+                                f"{settings.ANTHROPIC_BASE_URL}/302/webserve/project?project_id={deploy_project_id}",
                                 headers=headers)
