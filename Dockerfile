@@ -48,7 +48,7 @@ ENV HOME=/home/user
 
 # 安装插件
 RUN openclaw plugins install @openclaw-china/channels@latest
-RUN openclaw plugins install @openclaw/acpx
+RUN #openclaw plugins install @openclaw/acpx
 RUN #npx -y @tencent-weixin/openclaw-weixin-cli@latest install
 
 # 把插件数据备份到不会被挂载覆盖的目录
