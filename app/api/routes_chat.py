@@ -469,6 +469,7 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                     if await request.is_disconnected():
                         try:
                             await client.interrupt()
+                            log_info("[SDK]Request interrupted successfully")
                         except Exception:
                             pass
                         break
