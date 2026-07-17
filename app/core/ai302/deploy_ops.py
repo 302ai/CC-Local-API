@@ -38,7 +38,7 @@ async def create_302ai_deploy_task(
 
         response = await fetch_json_with_retry(
             'POST',
-            f"https://api.302.ai/302/webserve/project",
+            f"https://api.302ai.cn/302/webserve/project",
             session=session,
             data=form_data,
             headers=headers
@@ -49,5 +49,5 @@ async def create_302ai_deploy_task(
 
 async def get_302ai_deploy_task_info(deploy_project_id, headers: dict | None = None):
     return await fetch_json_with_retry("GET",
-                                f"https://api.302.ai/302/webserve/project?project_id={deploy_project_id}",
+                                f"https://api.302ai.cn/302/webserve/project?project_id={deploy_project_id}",
                                 headers=headers)
