@@ -19,6 +19,22 @@ from typing import Any, Optional, List, Literal, Union, Tuple
 from urllib.parse import quote, urlparse
 
 import aiohttp
+from claude_agent_sdk import (
+    ClaudeSDKClient,
+    ClaudeAgentOptions,
+    SystemMessage,
+    AssistantMessage,
+    UserMessage,
+    ResultMessage,
+    StreamEvent,
+    RateLimitEvent,
+    TextBlock,
+    ThinkingBlock,
+    ToolUseBlock,
+    ToolResultBlock,
+    ServerToolUseBlock,
+    ServerToolResultBlock,
+)
 from fastapi import APIRouter, Depends, Request, Query
 from starlette.responses import StreamingResponse
 
@@ -344,12 +360,15 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
                 if not cc_session_id:
                     actively_set_session_id = get_uuid()
                     init_input = "初始化项目，请直接回答你好并就结束任务（本次对话不使用任何MCP和skill和tool，但这个要求不要带到接下来的其他对话上）"
-                    init_session_resp = await runner.exec_json(f"echo '{init_input}' | claude -p --dangerously-skip-permissions true --session-id {actively_set_session_id} ",
-                                                               cwd=workspace_path,
-                                                               timeout=300,
-                                                               env=envs)
-                    if init_session_resp.exit_code != 0:
-                        yield  f"data: Init Failed: {init_session_resp.stderr}\n\n"
+                    init_ok, init_err = await _sdk_init_session(
+                        prompt=init_input,
+                        session_id=actively_set_session_id,
+                        cwd=workspace_path,
+                        model=opus_model,
+                        envs=envs,
+                    )
+                    if not init_ok:
+                        yield f"data: Init Failed: {init_err}\n\n"
                         return
                     cc_session_id = actively_set_session_id
                 cc_history_project_jsonl = f'{cc_history_project_path}/{cc_session_id}.jsonl'
@@ -411,89 +430,88 @@ async def stream_chat(request: Request, payload: ClaudeChatCompletionRequest, re
 
                 prefix = "\n\n".join(prefix_parts) + "\n\n"
                 final_user_prompt = prefix + user_prompt
-            claude_code_cmd = await run_in_threadpool(
-                lambda: _build_claude_command(
-                    final_user_prompt,
-                    cc_session_id,
-                    system_prompt, is_plan_mode=is_plan)
-            )
 
-            log_info(claude_code_cmd)
             # 判断是否传max_thinking_token
             max_thinking_token = 0
             if hasattr(payload, "max_thinking_token") and isinstance(payload.max_thinking_token, int):
                 max_thinking_token = payload.max_thinking_token
             envs["MAX_THINKING_TOKENS"] = str(max_thinking_token)
 
-            is_save_session = False
-            run_id: Optional[str] = None
-            try:
-                async for ev in runner.stream(
-                        claude_code_cmd,
-                        cwd=workspace_path,
-                        env=envs,
-                        timeout=1800,
-                ):
-                    if ev.get("event") == "start":
-                        run_id = ev.get("run_id")
+            def bind_op(sid, true_sid):
+                def op():
+                    with repo.atomic():
+                        return repo.bind_session_id(sid, true_sid)
 
+                return op
+
+            options = _build_agent_options(
+                cwd=workspace_path,
+                model=opus_model,
+                envs=envs,
+                permission_mode="plan" if is_plan else "bypassPermissions",
+                resume=cc_session_id,
+                system_prompt=system_prompt,
+                max_thinking_token=max_thinking_token,
+                include_partial_messages=True,
+            )
+            log_info(
+                f"[SDK] run claude agent cwd={workspace_path} resume={cc_session_id or ''} "
+                f"model={opus_model} plan={is_plan} max_thinking_token={max_thinking_token}"
+            )
+
+            is_save_session = False
+            last_heartbeat = 0.0
+            client = ClaudeSDKClient(options)
+            try:
+                await client.connect()
+                await client.query(final_user_prompt)
+                async for message in client.receive_response():
                     if await request.is_disconnected():
-                        if run_id:
-                            await runner.kill(run_id)
+                        try:
+                            await client.interrupt()
+                            log_info("[SDK]Request interrupted successfully")
+                        except Exception:
+                            pass
                         break
 
-                    event = ev.get("event")
-                    if event == "start":
-                        yield sse_message(
-                            "start",
-                            {"run_id": ev["run_id"], "pid": ev["pid"], "command": ev["command"]},
-                        )
-                    elif event == "heartbeat":
-                        if payload.structured_output:
-                            heartbeat = json.dumps({
-                                "type": "heartbeat",
-                                "timestamp": time.time()
-                            })
+                    line = _sdk_message_to_stream_json(message)
+                    if line is None:
+                        continue
+
+                    # 心跳兼容：SDK 没有空闲心跳，这里在 structured_output 时于 stream_event
+                    # 之前按 ~5s 节流补发一条 heartbeat，仅用于前端保活，不属于模型输出。
+                    if payload.structured_output and isinstance(message, StreamEvent):
+                        now = time.time()
+                        if now - last_heartbeat >= 5.0:
+                            last_heartbeat = now
+                            heartbeat = json.dumps({"type": "heartbeat", "timestamp": now})
                             yield f"data: {heartbeat}\n\n"
-                    elif event == "warning":
-                        log_warning(ev["text"])
-                    elif event == "output":
 
-                        def bind_op(sid, true_sid):
-                            def op():
-                                with repo.atomic():
-                                    return repo.bind_session_id(sid, true_sid)
+                    try:
+                        output_stream_json = json.loads(line)
+                        true_session_id = output_stream_json.get("session_id", "")
+                        if not is_save_session and true_session_id:
+                            # 第一次获取到CC真正的session_id,存一次
+                            session = await run_in_threadpool(bind_op(session.id, true_session_id))
+                            is_save_session = True
+                            log_info(f"Updated session_id: {true_session_id}")
+                            log_info(
+                                f"session id: {session.id}, workspace_path: {session.workspace_path}, note: {session.note}, alias: {session.session_alias}")
+                        # 最后result流再存一次
+                        if output_stream_json.get("type", "") == "result":
+                            session = await run_in_threadpool(bind_op(session.id, true_session_id))
+                    except Exception as e:
+                        log_error(f"The operation stream-json stream failed： {e}")
 
-                            return op
-
-                        try:
-                            output_stream_json = json.loads(ev["text"])
-                            true_session_id = output_stream_json.get("session_id", "")
-                            if not is_save_session and true_session_id:
-                                # 第一次获取到CC真正的session_id,存一次
-                                session = await run_in_threadpool(bind_op(session.id, true_session_id))
-                                is_save_session = True
-                                log_info(f"Updated session_id: {true_session_id}")
-                                log_info(
-                                    f"session id: {session.id}, workspace_path: {session.workspace_path}, note: {session.note}, alias: {session.session_alias}")
-                            # 最后result流再存一次
-                            if output_stream_json.get("type", "") == "result":
-                                session = await run_in_threadpool(bind_op(session.id, true_session_id))
-                        except Exception as e:
-                            log_error(f"The operation stream-json stream failed： {e}")
-
-                        yield f"data: {ev['text']}\n\n"
-                        # yield sse_message("output", {"run_id": ev["run_id"], "text": ev["text"]})
-                    elif event == "error":
-                        yield sse_message("error", {"run_id": ev["run_id"], "error": ev.get("error")})
-                    elif event == "done":
-                        yield sse_message(
-                            "done",
-                            {"run_id": ev["run_id"], "exit_code": ev.get("exit_code"), "lines": ev.get("lines")},
-                        )
+                    yield f"data: {line}\n\n"
+            except Exception as e:
+                log_error(f"[SDK] claude agent run failed: {e}")
+                yield sse_message("error", {"error": str(e)})
             finally:
-                if run_id:
-                    await runner.cleanup(run_id)
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
 
             # check_cmd = """find . -maxdepth 4 \( -path "./claude" -o -path "./claude/*" -o -path "./node_modules" -o -path "./node_modules/*" -o -path "./.git" -o -path "./.git/*" -o -path "./venv" -o -path "./venv/*" -o -path "./.venv" -o -path "./.venv/*" -o -path "./env" -o -path "./env/*" -o -path "./__pycache__" -o -path "./__pycache__/*" \) -prune -o -type f \( -name "package.json" -o -name "pnpm-lock.yaml" -o -name "yarn.lock" -o -name "package-lock.json" -o -name "next.config.*" -o -name "vite.config.*" -o -name "vue.config.*" -o -name "nuxt.config.*" -o -name "svelte.config.*" -o -name "astro.config.*" -o -name "remix.config.*" -o -name "angular.json" -o -name "gatsby-config.*" -o -path "./index.html" -o -path "*/public/index.html" -o -path "./server.js" -o -path "./app.js" -o -path "./index.js" -o -path "./main.js" -o -path "./server.ts" -o -path "./app.ts" -o -path "./index.ts" -o -path "./main.ts" -o -path "./src/index.js" -o -path "./src/index.ts" -o -path "./src/index.jsx" -o -path "./src/index.tsx" -o -path "./src/main.js" -o -path "./src/main.ts" -o -path "./src/main.jsx" -o -path "./src/main.tsx" -o -path "./src/App.vue" -o -path "./src/app.js" -o -path "./src/app.ts" -o -path "./src/app.jsx" -o -path "./src/app.tsx" -o -path "./src/server.js" -o -path "./src/server.ts" -o \( -path "./src/*" -a \( -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" -o -name "*.vue" \) \) \)"""
 
@@ -1241,6 +1259,227 @@ def _build_claude_command(
         command_parts.extend(["--system-prompt", shlex.quote(system_prompt)])
 
     return " ".join(command_parts)
+
+
+# 旧 CLI stream-json 输出里会出现的 system 子类型白名单。
+# 新版 SDK/CLI（如 2.1.195）额外新增了 status、thinking_tokens 等子类型，旧 CLI 没有，
+# 为保持输出与旧版一致，这些新增子类型在还原时会被跳过（不下发给前端）。
+_ALLOWED_SYSTEM_SUBTYPES = {"init"}
+
+
+def _block_to_dict(block: Any) -> dict:
+    """将 SDK 的内容块对象还原为 CLI stream-json 里的 dict 形态。
+
+    对应 claude_agent_sdk/_internal/message_parser.py 里 block 的解析逻辑的逆过程。
+    """
+    if isinstance(block, TextBlock):
+        return {"type": "text", "text": block.text}
+    if isinstance(block, ThinkingBlock):
+        return {"type": "thinking", "thinking": block.thinking, "signature": block.signature}
+    if isinstance(block, ToolUseBlock):
+        return {"type": "tool_use", "id": block.id, "name": block.name, "input": block.input}
+    if isinstance(block, ToolResultBlock):
+        d: dict = {"type": "tool_result", "tool_use_id": block.tool_use_id}
+        if block.content is not None:
+            d["content"] = block.content
+        if block.is_error is not None:
+            d["is_error"] = block.is_error
+        return d
+    if isinstance(block, ServerToolUseBlock):
+        return {"type": "server_tool_use", "id": block.id, "name": block.name, "input": block.input}
+    if isinstance(block, ServerToolResultBlock):
+        return {"type": "advisor_tool_result", "tool_use_id": block.tool_use_id, "content": block.content}
+    # 未知块类型：尽量透传
+    return {"type": "unknown"}
+
+
+def _sdk_message_to_stream_json(message: Any) -> Optional[str]:
+    """把 Claude Agent SDK 的类型化消息还原成 CLI `stream-json` 那一行 JSON 字符串。
+
+    目的：切换到 SDK 后，前端仍然收到与 `claude -p --output-format stream-json` 完全一致的
+    `data: {...}` 行，无需改动前端。返回 None 表示该消息不需要下发（跳过）。
+
+    还原规则与 claude_agent_sdk/_internal/message_parser.py 的解析规则互为逆过程。
+    """
+    # SystemMessage.data 保存的就是 CLI 原始 dict（含 type/session_id/subtype 等）。
+    # 新版 SDK/CLI 会额外产生旧 CLI 没有的 system 子类型（如 thinking_tokens、status），
+    # 为与旧 stream-json 输出保持一致、避免前端收到不认识的行，这里用白名单只放行
+    # 旧 CLI 也有的子类型（init），其余 system 消息一律跳过。
+    if isinstance(message, SystemMessage):
+        if message.subtype not in _ALLOWED_SYSTEM_SUBTYPES:
+            return None
+        return json.dumps(message.data, ensure_ascii=False)
+
+    if isinstance(message, StreamEvent):
+        payload_obj = {
+            "type": "stream_event",
+            "uuid": message.uuid,
+            "session_id": message.session_id,
+            "event": message.event,
+            "parent_tool_use_id": message.parent_tool_use_id,
+        }
+        return json.dumps(payload_obj, ensure_ascii=False)
+
+    if isinstance(message, AssistantMessage):
+        inner: dict = {
+            "role": "assistant",
+            "model": message.model,
+            "content": [_block_to_dict(b) for b in message.content],
+        }
+        if message.message_id is not None:
+            inner["id"] = message.message_id
+        if message.stop_reason is not None:
+            inner["stop_reason"] = message.stop_reason
+        if message.usage is not None:
+            inner["usage"] = message.usage
+        payload_obj = {
+            "type": "assistant",
+            "message": inner,
+            "session_id": message.session_id,
+            "parent_tool_use_id": message.parent_tool_use_id,
+            "uuid": message.uuid,
+        }
+        if message.error is not None:
+            payload_obj["error"] = message.error
+        return json.dumps(payload_obj, ensure_ascii=False)
+
+    if isinstance(message, UserMessage):
+        if isinstance(message.content, list):
+            content: Any = [_block_to_dict(b) for b in message.content]
+        else:
+            content = message.content
+        payload_obj = {
+            "type": "user",
+            "message": {"role": "user", "content": content},
+            "parent_tool_use_id": message.parent_tool_use_id,
+            "uuid": message.uuid,
+        }
+        if message.tool_use_result is not None:
+            payload_obj["tool_use_result"] = message.tool_use_result
+        return json.dumps(payload_obj, ensure_ascii=False)
+
+    if isinstance(message, ResultMessage):
+        payload_obj = {
+            "type": "result",
+            "subtype": message.subtype,
+            "is_error": message.is_error,
+            "duration_ms": message.duration_ms,
+            "duration_api_ms": message.duration_api_ms,
+            "num_turns": message.num_turns,
+            "session_id": message.session_id,
+            "result": message.result,
+            "total_cost_usd": message.total_cost_usd,
+            "usage": message.usage,
+            "stop_reason": message.stop_reason,
+        }
+        # CLI 里字段名是 modelUsage（camelCase），解析时映射到 model_usage，这里逆向还原
+        if message.model_usage is not None:
+            payload_obj["modelUsage"] = message.model_usage
+        if message.permission_denials is not None:
+            payload_obj["permission_denials"] = message.permission_denials
+        if message.errors is not None:
+            payload_obj["errors"] = message.errors
+        deferred = getattr(message, "deferred_tool_use", None)
+        if deferred is not None:
+            payload_obj["deferred_tool_use"] = {
+                "id": deferred.id,
+                "name": deferred.name,
+                "input": deferred.input,
+            }
+        if message.uuid is not None:
+            payload_obj["uuid"] = message.uuid
+        return json.dumps(payload_obj, ensure_ascii=False)
+
+    if isinstance(message, RateLimitEvent):
+        info = message.rate_limit_info
+        raw = getattr(info, "raw", None)
+        payload_obj = {
+            "type": "rate_limit_event",
+            "uuid": message.uuid,
+            "session_id": message.session_id,
+            "rate_limit_info": raw if raw is not None else {"status": info.status},
+        }
+        return json.dumps(payload_obj, ensure_ascii=False)
+
+    # 其它未识别类型：跳过（与 CLI 的前向兼容行为一致）
+    return None
+
+
+def _build_agent_options(
+    *,
+    cwd: str,
+    model: str,
+    envs: dict,
+    permission_mode: str = "bypassPermissions",
+    resume: Optional[str] = None,
+    session_id: Optional[str] = None,
+    system_prompt: Optional[str] = None,
+    max_thinking_token: int = 0,
+    include_partial_messages: bool = True,
+) -> ClaudeAgentOptions:
+    """构造 ClaudeAgentOptions。
+
+    system_prompt 语义与旧 CLI 保持一致：
+      - 传入非空字符串 -> 覆盖默认 system prompt（等价旧 `--system-prompt <sys>`）
+      - 为空/None -> 使用 claude_code 预设默认 prompt（不追加任何 --system-prompt，
+        避免 SDK 在 None 时下发 `--system-prompt ""` 把 CC 默认 agent prompt 清空）
+    """
+    if system_prompt and system_prompt.strip():
+        sp: Any = system_prompt
+    else:
+        sp = {"type": "preset", "preset": "claude_code"}
+
+    return ClaudeAgentOptions(
+        cwd=cwd,
+        model=model,
+        env=envs,
+        permission_mode=permission_mode,
+        resume=resume or None,
+        session_id=session_id or None,
+        system_prompt=sp,
+        max_thinking_tokens=max_thinking_token or None,
+        include_partial_messages=include_partial_messages,
+    )
+
+
+async def _sdk_init_session(
+    *,
+    prompt: str,
+    session_id: str,
+    cwd: str,
+    model: str,
+    envs: dict,
+) -> Tuple[bool, str]:
+    """用 SDK 跑一轮简单对话，为新会话生成项目历史 JSONL（供 forced-skill 注入）。
+
+    等价旧逻辑里的 `echo '<init>' | claude -p --session-id <uuid>`。
+    返回 (是否成功, 错误信息)。
+    """
+    options = _build_agent_options(
+        cwd=cwd,
+        model=model,
+        envs=envs,
+        permission_mode="bypassPermissions",
+        session_id=session_id,
+        include_partial_messages=False,
+    )
+    client = ClaudeSDKClient(options)
+    try:
+        await client.connect()
+        await client.query(prompt)
+        is_error = False
+        async for message in client.receive_response():
+            if isinstance(message, ResultMessage):
+                is_error = bool(message.is_error)
+        return (not is_error), ("" if not is_error else "init session returned error result")
+    except Exception as e:
+        return False, str(e)
+    finally:
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+
 
 async def _save_attachments(files, workspace_path):
     attachment_path = f"{workspace_path}/.302ai/attachments"
